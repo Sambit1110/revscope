@@ -13,6 +13,7 @@ import { err, type Result } from "../../domain/result.js";
 import type {
   AnalysisProvider,
   ArtifactReader,
+  BinaryAnalysisEngine,
   JsonFileReader,
   Logger,
 } from "../ports.js";
@@ -25,9 +26,20 @@ export interface ToolContext {
   readonly createStubProvider: (
     fixture: unknown,
   ) => Result<AnalysisProvider, ErrorEnvelope>;
+  /** The native-code analysis engine, or null when none is configured. */
+  readonly binaryAnalysis: BinaryAnalysisEngine | null;
   readonly logger: Logger;
   readonly newCorrelationId: () => string;
 }
+
+/** Per-invocation inputs that are not part of a tool's arguments. */
+export interface ToolCall {
+  /** Aborted when the caller cancels (CLI signal, MCP cancellation, shutdown). */
+  readonly signal: AbortSignal;
+}
+
+/** A call that is never cancelled. */
+export const uncancellableCall = (): ToolCall => ({ signal: new AbortController().signal });
 
 export interface ToolSuccess {
   readonly records: readonly Evidence[];
@@ -58,7 +70,7 @@ export interface ToolDefinition {
   readonly readOnly: boolean;
   readonly inputSchema: z.ZodType;
   /** Validate raw input with the tool's schema, then run it. */
-  invoke(raw: unknown, context: ToolContext): Promise<Result<ToolSuccess, ErrorEnvelope>>;
+  invoke(raw: unknown, context: ToolContext, call: ToolCall): Promise<Result<ToolSuccess, ErrorEnvelope>>;
 }
 
 /** Bind a typed input schema to its implementation so validation cannot be skipped. */
@@ -71,6 +83,7 @@ export const defineTool = <Input>(spec: {
   readonly run: (
     input: Input,
     context: ToolContext,
+    call: ToolCall,
   ) => Promise<Result<ToolSuccess, ErrorEnvelope>>;
 }): ToolDefinition => ({
   name: spec.name,
@@ -78,13 +91,13 @@ export const defineTool = <Input>(spec: {
   description: spec.description,
   readOnly: spec.readOnly,
   inputSchema: spec.input,
-  invoke: async (raw, context) => {
+  invoke: async (raw, context, call) => {
     const parsed = spec.input.safeParse(raw);
     if (!parsed.success)
       return err(
         invalidInput(`Input for ${spec.name} is invalid`, issuesFromZod(parsed.error)),
       );
-    return spec.run(parsed.data, context);
+    return spec.run(parsed.data, context, call);
   },
 });
 

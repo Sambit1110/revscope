@@ -40,6 +40,7 @@ describe("MCP compatibility with an independent client", () => {
       "report_evidence",
       "compare_evidence",
       "stub_analysis",
+      "analyze_binary",
     ]);
     expect(client.getServerVersion()).toMatchObject({ name: "revscope" });
   });

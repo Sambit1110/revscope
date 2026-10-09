@@ -37,6 +37,7 @@ describe("documented CLI usage against fixtures", () => {
       "report-evidence",
       "compare-evidence",
       "stub-analysis",
+      null,
     ]);
   });
 

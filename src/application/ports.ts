@@ -121,3 +121,61 @@ export interface Logger {
   warn(entry: LogEvent): void;
   error(entry: LogEvent): void;
 }
+
+/** Limits for one engine run, already validated by the tool. */
+export interface BinaryAnalysisLimits {
+  /** Total time for the whole operation, including setup and cleanup. */
+  readonly timeoutMs: number;
+  readonly maxFunctions: number;
+  readonly decompile: boolean;
+  /** Per-function decompilation limit; never extends the total deadline. */
+  readonly decompileTimeoutMs: number;
+}
+
+export interface BinaryAnalysisRequest {
+  /** Absolute path supplied by the caller. */
+  readonly path: string;
+  readonly limits: BinaryAnalysisLimits;
+  readonly signal: AbortSignal;
+}
+
+/** What is left of a run's processes and files after it returned. Fixed texts only, never paths. */
+export interface EngineCleanup {
+  readonly process: "not-started" | "not-needed" | "terminated" | "failed";
+  readonly workspace: "not-created" | "removed" | "failed";
+  readonly reason: string | null;
+}
+
+/** How much of the program the engine's export covers, and why it may cover less. */
+export interface BinaryAnalysisCoverage {
+  /** False when the export was cut off before its final record. */
+  readonly exportComplete: boolean;
+  /** Why an incomplete export stopped; null when it is complete. */
+  readonly interruption: "timed-out" | "engine-exited" | null;
+  /** Why a complete export covers less than the whole program; null when incomplete. */
+  readonly stopped: "complete" | "function-limit" | "deadline" | null;
+  /** Whether the engine's own auto-analysis hit its time limit; null when unknown. */
+  readonly analysisTimedOut: boolean | null;
+  /** Functions the engine found in the program; null when the export does not say. */
+  readonly functionsTotal: number | null;
+  readonly functionsExported: number;
+}
+
+export interface BinaryAnalysisRun {
+  /** Read-only provider serving the validated export (see engineContract.ts). */
+  readonly provider: AnalysisProvider;
+  /** Facts about the exact bytes the engine analyzed. */
+  readonly artifact: ArtifactFacts;
+  readonly coverage: BinaryAnalysisCoverage;
+  readonly cleanup: EngineCleanup;
+}
+
+/**
+ * A native-code analysis engine run once per request. Implementations must
+ * never execute the input, must return by `limits.timeoutMs` plus scheduling
+ * latency, and must report cleanup failures instead of hiding them. Errors
+ * carry `details.cleanup` when anything was started.
+ */
+export interface BinaryAnalysisEngine {
+  analyze(request: BinaryAnalysisRequest): Promise<Result<BinaryAnalysisRun, ErrorEnvelope>>;
+}

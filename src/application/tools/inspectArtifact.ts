@@ -2,8 +2,10 @@ import { z } from "zod";
 
 import { classifyHeader } from "../../domain/artifactFormat.js";
 import { evidenceFromCapability } from "../../domain/capability.js";
-import type { Subject } from "../../domain/evidence.js";
-import { ok } from "../../domain/result.js";
+import type { ErrorEnvelope } from "../../domain/errors.js";
+import type { Evidence, Subject } from "../../domain/evidence.js";
+import { ok, type Result } from "../../domain/result.js";
+import type { ArtifactFacts } from "../ports.js";
 import {
   ARTIFACT_FORMAT,
   ARTIFACT_IDENTITY,
@@ -16,6 +18,28 @@ const LEADING_BYTES_SHOWN = 16;
 const hex = (bytes: Uint8Array): string =>
   [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
+/** The artifact a set of facts describes, identified by content alone. */
+export const artifactSubject = (facts: ArtifactFacts): Subject => ({
+  kind: "artifact",
+  sha256: facts.sha256,
+  size_bytes: facts.sizeBytes,
+});
+
+/** Revscope's own read of the bytes: the only evidence that speaks for the original artifact. */
+export const identityEvidence = (facts: ArtifactFacts): Result<Evidence, ErrorEnvelope> =>
+  evidenceFromCapability(ARTIFACT_IDENTITY, {
+    subject: artifactSubject(facts),
+    parameters: {},
+    payload: {
+      size_bytes: facts.sizeBytes,
+      sha256: facts.sha256,
+      leading_bytes_hex: hex(facts.header.subarray(0, LEADING_BYTES_SHOWN)),
+    },
+    producer: REVSCOPE_PRODUCER,
+    unknowns: [],
+    limitations: [],
+  });
+
 export const inspectArtifactTool = defineTool({
   name: "inspect_artifact",
   title: "Inspect artifact metadata",
@@ -26,20 +50,9 @@ export const inspectArtifactTool = defineTool({
   run: async ({ path }, context) => {
     const facts = await context.artifactReader.read(path);
     if (!facts.ok) return facts;
-    const { displayName, sizeBytes, sha256, header } = facts.value;
-    const subject: Subject = { kind: "artifact", sha256, size_bytes: sizeBytes };
-    const identity = evidenceFromCapability(ARTIFACT_IDENTITY, {
-      subject,
-      parameters: {},
-      payload: {
-        size_bytes: sizeBytes,
-        sha256,
-        leading_bytes_hex: hex(header.subarray(0, LEADING_BYTES_SHOWN)),
-      },
-      producer: REVSCOPE_PRODUCER,
-      unknowns: [],
-      limitations: [],
-    });
+    const { displayName, sizeBytes, header } = facts.value;
+    const subject = artifactSubject(facts.value);
+    const identity = identityEvidence(facts.value);
     if (!identity.ok) return identity;
     const classification = classifyHeader(header, { truncated: header.length < sizeBytes });
     const format = evidenceFromCapability(ARTIFACT_FORMAT, {

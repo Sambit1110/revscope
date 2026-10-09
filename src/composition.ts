@@ -24,6 +24,7 @@ export const createToolContext = (options: {
       ? ok(new StubAnalysisProvider(parsed.data))
       : err(invalidInput("The stub fixture is invalid", issuesFromZod(parsed.error, "fixture")));
   },
+  binaryAnalysis: null,
   logger: createLogger(options.logLevel, options.writeLog),
   newCorrelationId: () => `cor_${randomUUID().replaceAll("-", "")}`,
 });

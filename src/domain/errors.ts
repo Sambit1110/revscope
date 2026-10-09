@@ -91,6 +91,24 @@ export const ERROR_CATALOG = {
     remediation:
       "A provider called back into the session that is waiting for it. Providers must not call their own session; correct the provider.",
   },
+  provider_not_configured: {
+    category: "unsupported",
+    retryable: false,
+    remediation:
+      "Install a supported analysis engine and point Revscope at it (REVSCOPE_GHIDRA_DIR for Ghidra, optionally REVSCOPE_JAVA_HOME). details.check names the check that failed.",
+  },
+  analysis_timeout: {
+    category: "resource_limit",
+    retryable: false,
+    remediation:
+      "The engine produced no usable result before the deadline. Raise timeout_ms (up to the documented maximum) or analyze a smaller file.",
+  },
+  analysis_incomplete: {
+    category: "partial_failure",
+    retryable: false,
+    remediation:
+      "The engine stopped before its export was complete. details.partial_records holds what was validated; raise timeout_ms or lower max_functions to get a complete result.",
+  },
   provider_failure: {
     category: "execution_failure",
     retryable: true,

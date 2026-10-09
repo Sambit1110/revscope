@@ -1,11 +1,14 @@
 import { makeError, type ErrorEnvelope } from "../../domain/errors.js";
 import { parseEvidence } from "../../domain/evidence.js";
+import { analyzeBinaryTool } from "./analyzeBinary.js";
 import { compareEvidenceTool, reportEvidenceTool } from "./evidenceTools.js";
 import { inspectArtifactTool } from "./inspectArtifact.js";
 import { stubAnalysisTool } from "./stubAnalysis.js";
 import {
   successOutputSchema,
   toJson,
+  uncancellableCall,
+  type ToolCall,
   type ToolContext,
   type ToolDefinition,
   type ToolOutput,
@@ -17,6 +20,7 @@ export const TOOLS: readonly ToolDefinition[] = [
   reportEvidenceTool,
   compareEvidenceTool,
   stubAnalysisTool,
+  analyzeBinaryTool,
 ];
 
 export const findTool = (name: string): ToolDefinition | undefined =>
@@ -56,13 +60,14 @@ export const executeTool = async (
   context: ToolContext,
   name: string,
   raw: unknown,
+  call: ToolCall = uncancellableCall(),
 ): Promise<ToolOutput> => {
   const tool = findTool(name);
   if (tool === undefined) return failure(unknownToolError(name));
   const started = performance.now();
   let output: ToolOutput;
   try {
-    const result = await tool.invoke(raw ?? {}, context);
+    const result = await tool.invoke(raw ?? {}, context, call);
     if (!result.ok) output = failure(result.error);
     else {
       const candidate = {
