@@ -45,28 +45,36 @@ const startsWith = (header: Uint8Array, signature: readonly number[]): boolean =
 
 const TEXT_CONTROL_BYTES = new Set([0x09, 0x0a, 0x0c, 0x0d]);
 
-const looksLikeUtf8Text = (header: Uint8Array): boolean => {
+/**
+ * Whether the sampled bytes are valid UTF-8 text. When the sample is a
+ * truncated prefix of a longer file, a multi-byte character cut by the
+ * sample boundary is allowed; invalid bytes never are, and a complete file
+ * must end on a character boundary.
+ */
+const looksLikeUtf8Text = (header: Uint8Array, truncated: boolean): boolean => {
   if (header.length === 0) return false;
   if (header.some((byte) => byte < 0x20 && !TEXT_CONTROL_BYTES.has(byte)))
     return false;
-  // A multi-byte sequence may be cut at the end of the sampled header, so
-  // ignore up to three trailing bytes when the header was truncated.
-  for (const trim of [0, 1, 2, 3]) {
-    if (trim >= header.length) break;
-    try {
-      new TextDecoder("utf-8", { fatal: true }).decode(
-        header.subarray(0, header.length - trim),
-      );
-      return true;
-    } catch {
-      // Try a shorter prefix.
-    }
+  try {
+    // In streaming mode an incomplete trailing sequence is held back, not
+    // rejected; without it the decoder rejects one at the end of the input.
+    new TextDecoder("utf-8", { fatal: true }).decode(header, { stream: truncated });
+    return true;
+  } catch {
+    return false;
   }
-  return false;
 };
 
+export interface ClassifyOptions {
+  /** True when the header is a prefix of a longer file. Default false: the header is the whole file. */
+  readonly truncated?: boolean;
+}
+
 /** Suggest a format from leading bytes. This is a judgement, never validation. */
-export const classifyHeader = (header: Uint8Array): FormatClassification => {
+export const classifyHeader = (
+  header: Uint8Array,
+  options: ClassifyOptions = {},
+): FormatClassification => {
   for (const signature of SIGNATURES)
     if (startsWith(header, signature.bytes))
       return {
@@ -74,7 +82,7 @@ export const classifyHeader = (header: Uint8Array): FormatClassification => {
         matched_signature_hex: toHex(signature.bytes),
         basis: "leading magic bytes",
       };
-  if (looksLikeUtf8Text(header))
+  if (looksLikeUtf8Text(header, options.truncated ?? false))
     return {
       label: "utf8-text",
       matched_signature_hex: null,

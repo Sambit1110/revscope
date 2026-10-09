@@ -17,10 +17,23 @@ describe("header classification", () => {
     expect(classifyHeader(header).label).toBe(label);
   });
 
-  it("recognizes UTF-8 text, including a multi-byte character cut at the end", () => {
+  it("recognizes UTF-8 text, including a multi-byte character cut by a truncated sample", () => {
     const text = new TextEncoder().encode("héllo wörld");
     expect(classifyHeader(text).label).toBe("utf8-text");
-    expect(classifyHeader(text.subarray(0, text.length - 1)).label).toBe("utf8-text");
+    const cut = new TextEncoder().encode("hello wö").subarray(0, -1);
+    expect(classifyHeader(cut, { truncated: true }).label).toBe("utf8-text");
+  });
+
+  it("does not call invalid UTF-8 text", () => {
+    const hello = [...new TextEncoder().encode("hello")];
+    // A byte that is never valid UTF-8, at the end of a complete file or of a sample.
+    expect(classifyHeader(Uint8Array.from([...hello, 0xff])).label).toBe("unknown");
+    expect(classifyHeader(Uint8Array.from([...hello, 0xff]), { truncated: true }).label).toBe("unknown");
+    // A complete file cannot end inside a character.
+    expect(classifyHeader(Uint8Array.from([...hello, 0xc3])).label).toBe("unknown");
+    // An overlong encoding and a lone continuation byte are invalid anywhere.
+    expect(classifyHeader(Uint8Array.from([...hello, 0xc0, 0xaf, ...hello]), { truncated: true }).label).toBe("unknown");
+    expect(classifyHeader(Uint8Array.from([...hello, 0x80, ...hello])).label).toBe("unknown");
   });
 
   it("returns unknown for empty input and binary noise", () => {

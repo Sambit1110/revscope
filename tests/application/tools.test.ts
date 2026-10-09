@@ -79,6 +79,20 @@ describe("inspect_artifact", () => {
     ]);
   });
 
+  it("classifies text by whether the sampled header is the whole file", async () => {
+    const { context } = testContext();
+    const directory = await tempDir();
+    const cutText = join(directory, "long.txt");
+    const invalidText = join(directory, "short.txt");
+    // 63 ASCII bytes, then a two-byte character split by the 64-byte sample.
+    await writeFile(cutText, `${"a".repeat(63)}é and more text`);
+    await writeFile(invalidText, Buffer.concat([Buffer.from("hello"), Buffer.from([0xff])]));
+    const cut = success(await executeTool(context, "inspect_artifact", { path: cutText }));
+    expect(cut.records[1]?.payload).toMatchObject({ label: "utf8-text" });
+    const invalid = success(await executeTool(context, "inspect_artifact", { path: invalidText }));
+    expect(invalid.records[1]?.payload).toMatchObject({ label: "unknown" });
+  });
+
   it("gives the same evidence identifiers for identical bytes under different paths and names", async () => {
     const { context } = testContext();
     const directory = await tempDir();

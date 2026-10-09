@@ -41,7 +41,7 @@ export const inspectArtifactTool = defineTool({
       limitations: [],
     });
     if (!identity.ok) return identity;
-    const classification = classifyHeader(header);
+    const classification = classifyHeader(header, { truncated: header.length < sizeBytes });
     const format = evidenceFromCapability(ARTIFACT_FORMAT, {
       subject,
       parameters: {},
