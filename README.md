@@ -101,10 +101,10 @@ newline-delimited, stdio). It supports protocol revisions 2025-06-18,
 
 Every record has these fields, and none of them is defaulted:
 
-- `schema` (`revscope.evidence/2`)
+- `schema` (`revscope.evidence/3`)
 - `evidence_id`: `ev_` plus the SHA-256 of the canonical content
 - `result_kind`
-- `confidence`: `observed`, `derived` or `inferred`
+- `confidence`: `observed`, `derived`, `reported` or `inferred`
 - `authority`: `original-artifact`, `analysis-engine`, `analysis-state`,
   `revscope-computation` or `analyst-assertion`
 - `subject`
@@ -130,7 +130,9 @@ table; producers cannot choose them. For example:
 - Decompiler output (`engine-interpretation`) is always `derived`
   `analysis-engine` evidence. It is never an observed fact about the original
   artifact.
-- A mutation acknowledgement only describes analysis state.
+- A mutation acknowledgement is `reported` `analysis-state` evidence: the
+  provider's account of a change it made, not an observation of the
+  resulting state.
 
 The identifier detects accidental or partial modification. It is an unkeyed
 digest, so it does **not** prove who produced a record.

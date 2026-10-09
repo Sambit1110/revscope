@@ -79,7 +79,7 @@ describe("documented CLI usage against fixtures", () => {
       "observed",
       "derived",
       "observed",
-      "observed",
+      "reported",
       "observed",
     ]);
 

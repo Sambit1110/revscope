@@ -2,7 +2,13 @@ import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { BUILTIN_CAPABILITIES, PRODUCT_VERSION } from "../../src/application/tools/builtinCapabilities.js";
+import {
+  ARTIFACT_FORMAT,
+  ARTIFACT_IDENTITY,
+  BUILTIN_CAPABILITIES,
+  EVIDENCE_COMPARISON,
+  PRODUCT_VERSION,
+} from "../../src/application/tools/builtinCapabilities.js";
 import { TOOLS, executeTool } from "../../src/application/tools/registry.js";
 import { toolOutputSchema, type ToolOutput } from "../../src/application/tools/types.js";
 import { capabilityIssues } from "../../src/domain/capability.js";
@@ -22,6 +28,10 @@ describe("tool registry", () => {
   it("declares coherent semantics for every built-in capability", () => {
     for (const capability of BUILTIN_CAPABILITIES)
       expect(capabilityIssues(capability), capability.operation).toEqual([]);
+    // Each built-in capability describes the subject its tool records.
+    expect(capabilityIssues(ARTIFACT_IDENTITY, { subjectKind: "artifact" })).toEqual([]);
+    expect(capabilityIssues(ARTIFACT_FORMAT, { subjectKind: "artifact" })).toEqual([]);
+    expect(capabilityIssues(EVIDENCE_COMPARISON, { subjectKind: "evidence-set" })).toEqual([]);
   });
 
   it("keeps the product version in step with package.json", async () => {
@@ -207,7 +217,7 @@ describe("stub_analysis", () => {
     expect(output.records.map(({ confidence, authority }) => `${confidence}/${authority}`)).toEqual([
       "observed/analysis-state",
       "derived/analysis-engine",
-      "observed/analysis-state",
+      "reported/analysis-state",
     ]);
     expect(output.data["snapshots"]).toHaveLength(1);
   });

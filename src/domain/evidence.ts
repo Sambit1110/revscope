@@ -15,15 +15,17 @@ import {
 } from "./json.js";
 import { err, ok, type Result } from "./result.js";
 
-export const EVIDENCE_SCHEMA = "revscope.evidence/2";
+export const EVIDENCE_SCHEMA = "revscope.evidence/3";
 
 /**
  * How directly the claim was established:
  * - observed: read directly from the subject without interpretation;
  * - derived: computed deterministically from observations or by a modelling engine;
+ * - reported: the producer's own account of an action it performed, not
+ *   confirmed by observing the result;
  * - inferred: a judgement that may be wrong; it must state its basis.
  */
-export const CONFIDENCE_LEVELS = ["observed", "derived", "inferred"] as const;
+export const CONFIDENCE_LEVELS = ["observed", "derived", "reported", "inferred"] as const;
 export type Confidence = (typeof CONFIDENCE_LEVELS)[number];
 
 /**
@@ -110,9 +112,11 @@ export const RESULT_KIND_SEMANTICS: Readonly<Record<ResultKind, ResultKindSemant
     effect: "read",
     requiresBasis: false,
   },
-  // A provider's report that it changed analysis state. Never a fact about the artifact.
+  // A provider's report that it changed analysis state. It is neither a fact
+  // about the artifact nor an observation of the resulting state: only a
+  // later read or state observation establishes what the state now holds.
   "mutation-acknowledgement": {
-    confidence: "observed",
+    confidence: "reported",
     authority: "analysis-state",
     subjectKinds: ["analysis-state"],
     effect: "mutate",
@@ -147,6 +151,9 @@ export const sessionIdSchema = z
   .regex(/^ses_[0-9a-f]{16}$/, "Must be ses_ followed by 16 hexadecimal characters");
 /** Opaque provider identifier for one exact analysis state. */
 export const stateTokenSchema = z.string().min(1).max(256);
+export const operationNameSchema = z
+  .string()
+  .regex(/^[a-z][a-z0-9_]*$/, "Must be a lowercase snake_case operation name");
 
 export const subjectSchema = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -180,9 +187,7 @@ const draftShape = {
   result_kind: z.enum(RESULT_KINDS),
   subject: subjectSchema,
   operation: z.strictObject({
-    name: z
-      .string()
-      .regex(/^[a-z][a-z0-9_]*$/, "Must be a lowercase snake_case operation name"),
+    name: operationNameSchema,
     parameters: jsonObjectSchema,
   }),
   producer: z.strictObject({

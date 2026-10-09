@@ -22,19 +22,24 @@ const settle = async () => {
   for (let index = 0; index < 10; index += 1) await Promise.resolve();
 };
 
-const declare = (resultKind: string, effect: "read" | "mutate"): AnalysisProvider => ({
+const capability = (resultKind: string, effect: string, overrides: { operation?: string; limitations?: string[] } = {}) => ({
+  operation: overrides.operation ?? "decompile",
+  description: "invalid",
+  effect: effect as "read" | "mutate",
+  resultKind: resultKind as ResultKind,
+  limitations: overrides.limitations ?? [],
+  parameters: z.strictObject({}),
+});
+
+const declare = (
+  resultKind: string,
+  effect: string,
+  overrides: { operation?: string; limitations?: string[] } = {},
+  extra: ReturnType<typeof capability>[] = [],
+): AnalysisProvider => ({
   identity: { id: "bad", version: "1" },
   artifactSha256: "d".repeat(64),
-  capabilities: () => [
-    {
-      operation: "decompile",
-      description: "invalid",
-      effect,
-      resultKind: resultKind as ResultKind,
-      limitations: [],
-      parameters: z.strictObject({}),
-    },
-  ],
+  capabilities: () => [capability(resultKind, effect, overrides), ...extra],
   read: () => Promise.reject(new Error("unused")),
   mutate: () => Promise.reject(new Error("unused")),
   observeState: () => Promise.resolve({ status: "ok", stateToken: "t" }),
@@ -62,6 +67,22 @@ describe("opening a session", () => {
   it("refuses providers that declare unsupported result kinds or mismatched effects", async () => {
     expect((await AnalysisSession.open(declare("observed-fact", "read"), "ses_00000000000000bb")).ok).toBe(false);
     expect((await AnalysisSession.open(declare("state-observation", "mutate"), "ses_00000000000000bb")).ok).toBe(false);
+  });
+
+  it.each([
+    ["decompiler output as artifact bytes", declare("artifact-bytes", "read"), "artifact-bytes results cannot describe a subject of kind analysis-state"],
+    ["decompiler output as an artifact heuristic", declare("artifact-heuristic", "read", { limitations: ["engine"] }), "cannot describe a subject of kind analysis-state"],
+    ["a provider result as a Revscope computation", declare("derived-computation", "read"), "cannot describe a subject of kind analysis-state"],
+    ["ordinary reads as the authoritative state observation", declare("state-observation", "read", { operation: "observe_state" }), "the operation name observe_state is reserved"],
+    ["an operation name evidence cannot carry", declare("state-observation", "read", { operation: "Decompile" }), "lowercase snake_case"],
+    ["an effect outside read and mutate", declare("mutation-acknowledgement", "delete"), "unsupported effect delete"],
+    ["an empty limitation", declare("engine-interpretation", "read", { limitations: [""] }), "limitations must be non-empty strings"],
+    ["the same operation twice", declare("engine-interpretation", "read", {}, [capability("engine-interpretation", "read")]), "declared more than once"],
+  ])("refuses a provider that declares %s before producing any result", async (_label, provider, issue) => {
+    const opened = await AnalysisSession.open(provider, "ses_00000000000000bb");
+    const error = failure(opened);
+    expect(error.code).toBe("internal_error");
+    expect(error.details["issues"]).toEqual(expect.arrayContaining([expect.stringContaining(issue)]));
   });
 });
 
@@ -237,6 +258,8 @@ describe("mutation outcomes", () => {
     value(await session.read("get_name", { address: "0x1000" }));
     const renamed = value(await session.mutate("rename", { names: { "0x1000": "entry" } }));
     expect(renamed.evidence.result_kind).toBe("mutation-acknowledgement");
+    // The provider's account of what it did, not an observation of the resulting state.
+    expect(renamed.evidence.confidence).toBe("reported");
     expect(renamed.evidence.authority).toBe("analysis-state");
     expect(renamed.evidence.limitations.join(" ")).toContain("the original artifact is neither modified nor described");
     expect(session.state().state_token).toBe(provider.stateToken());

@@ -1,7 +1,9 @@
 # ADR-0001: Evidence labels are derived from a closed set of result kinds
 
 **Status:** accepted. Revised in Phase 3.6: the free-form labels on
-capabilities were replaced by result kinds.
+capabilities were replaced by result kinds. Revised again in the Phase 3.6
+hardening pass: acknowledgements became `reported`, and provider declarations
+are checked against the subject they describe.
 
 ## Context
 
@@ -28,7 +30,14 @@ own confidence/authority pair. A review then showed that a capability named
 - **Labels are checked against the table.** `parseEvidence` rejects records
   whose labels disagree with it.
 - **Mutations acknowledge, reads observe.** Mutating capabilities must produce
-  `mutation-acknowledgement`, and nothing else may.
+  `mutation-acknowledgement`, and nothing else may. An acknowledgement's
+  confidence is `reported`, a level used for nothing else: it records what the
+  provider says it did, not an observation of the resulting state.
+- **Declarations are checked in context.** A session checks each provider
+  capability against the analysis-state subject its results will describe, so
+  a provider cannot declare kinds that speak for the original artifact. The
+  session's `observe_state` operation is reserved, and operation names,
+  effects and limitations are validated at runtime.
 - **Basis required for judgements.** Heuristic and assertion kinds must state
   their basis.
 - **Identity covers everything semantic.** The identifier is an unkeyed digest
@@ -42,4 +51,7 @@ own confidence/authority pair. A review then showed that a capability named
   provider reviews must check each declared kind against what the operation
   actually does.
 - Adding a kind is a deliberate domain change, made in one table.
-- The evidence schema changed to `revscope.evidence/2`.
+- The evidence schema changed to `revscope.evidence/2`, then to
+  `revscope.evidence/3` when the `reported` confidence level was added and
+  acknowledgements moved to it. Records of earlier schemas are rejected
+  rather than reinterpreted.

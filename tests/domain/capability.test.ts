@@ -49,6 +49,29 @@ describe("capability declarations", () => {
     expect(capabilityIssues(capability({ effect: "mutate", resultKind: "mutation-acknowledgement" }))).toEqual([]);
   });
 
+  it("rejects names evidence cannot carry, effects outside read and mutate, and empty limitations", () => {
+    expect(capabilityIssues(capability({ operation: "Get Name" }))).toEqual([
+      "the operation name must be lowercase snake_case",
+    ]);
+    expect(capabilityIssues(capability({ effect: "delete" as "read" }))).toEqual(["unsupported effect delete"]);
+    expect(capabilityIssues(capability({ limitations: [""] }))).toEqual(["limitations must be non-empty strings"]);
+  });
+
+  it("checks a declaration against the subject its results will describe", () => {
+    const decompileAsBytes = capability({ operation: "decompile", resultKind: "artifact-bytes" });
+    expect(capabilityIssues(decompileAsBytes)).toEqual([]);
+    expect(capabilityIssues(decompileAsBytes, { subjectKind: "analysis-state" })).toEqual([
+      "artifact-bytes results cannot describe a subject of kind analysis-state",
+    ]);
+    expect(capabilityIssues(capability({ resultKind: "engine-interpretation" }), { subjectKind: "analysis-state" })).toEqual([]);
+  });
+
+  it("refuses reserved operation names", () => {
+    expect(capabilityIssues(capability({ operation: "observe_state" }), { reservedOperations: ["observe_state"] })).toEqual([
+      "the operation name observe_state is reserved",
+    ]);
+  });
+
   it("requires heuristic capabilities to declare their basis", () => {
     expect(capabilityIssues(capability({ resultKind: "unverified-assertion" }))).toEqual([
       "unverified-assertion capabilities must declare the basis of their results",

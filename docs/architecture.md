@@ -52,7 +52,7 @@ Every result has a **result kind** from a closed list
 | `artifact-heuristic` | inferred | original-artifact | artifact | reads (must state its basis) |
 | `engine-interpretation` | derived | analysis-engine | analysis state | reads |
 | `state-observation` | observed | analysis-state | analysis state | reads |
-| `mutation-acknowledgement` | observed | analysis-state | analysis state | mutations only |
+| `mutation-acknowledgement` | reported | analysis-state | analysis state | mutations only |
 | `derived-computation` | derived | revscope-computation | evidence set | reads |
 | `unverified-assertion` | inferred | analyst-assertion | artifact or analysis state | reads (must state its basis) |
 
@@ -63,8 +63,27 @@ from the table, even if its identifier was recomputed. As a consequence:
 
 - Decompiler output is `engine-interpretation`, which is never `observed` and
   never speaks for the original artifact.
-- A mutation acknowledgement only describes analysis state, and only mutating
-  capabilities may produce one. Reads may not.
+- A mutation acknowledgement is `reported`: the provider's own account of a
+  change it made. It is not an observation of the resulting state, which only
+  a later read or state observation establishes. It only describes analysis
+  state, and only mutating capabilities may produce one.
+
+The checks run wherever evidence is made or accepted:
+
+- **Provider declarations** are checked when a session opens, against the
+  subject their results will describe (always analysis state). A provider
+  cannot declare a kind that speaks for the original artifact, such as
+  presenting decompiler output as `artifact-bytes`, cannot take the session's
+  reserved `observe_state` operation, and must use operation names, effects
+  and limitations that evidence can carry. The session refuses to open
+  otherwise and lists the issues.
+- **Built-in tools** create evidence through the same declarations.
+- **Imported records** (`report-evidence`, `compare-evidence`) are checked by
+  `parseEvidence` against the same table: labels, subject kind and basis.
+
+A provider can still choose a wrong kind within those bounds, for example
+`state-observation` for decompiler output; provider reviews must check each
+declared kind against what the operation does.
 
 ### Integrity is not authenticity
 

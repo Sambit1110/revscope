@@ -161,6 +161,11 @@ export class AnalysisSession {
   /**
    * Check every capability declaration, then establish the initial verified
    * state token with a fresh state observation.
+   *
+   * Provider results always describe analysis state, so a provider can never
+   * declare a kind that speaks for the original artifact (such as presenting
+   * decompiler output as artifact bytes), nor take the session's own
+   * `observe_state` operation.
    */
   static async open(
     provider: AnalysisProvider,
@@ -169,10 +174,16 @@ export class AnalysisSession {
   ): Promise<Result<AnalysisSession, ErrorEnvelope>> {
     const capabilities = new Map<string, ProviderCapability>();
     for (const capability of provider.capabilities()) {
-      if (capabilityIssues(capability).length > 0 || capabilities.has(capability.operation))
+      const issues = capabilityIssues(capability, {
+        subjectKind: "analysis-state",
+        reservedOperations: [OBSERVE_STATE.operation],
+      });
+      if (capabilities.has(capability.operation)) issues.push("the operation is declared more than once");
+      if (issues.length > 0)
         return err(
           makeError("internal_error", "The provider declared an invalid capability", {
-            operation: capability.operation,
+            operation: String(capability.operation),
+            issues,
           }),
         );
       capabilities.set(capability.operation, capability);

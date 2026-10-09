@@ -41,7 +41,7 @@ const withRecomputedId = (record: Record<string, unknown>) => {
 describe("evidence creation", () => {
   it("creates a record whose labels come from its result kind", () => {
     const evidence = create(artifactDraft());
-    expect(evidence.schema).toBe("revscope.evidence/2");
+    expect(evidence.schema).toBe("revscope.evidence/3");
     expect(evidence.evidence_id).toMatch(/^ev_[0-9a-f]{64}$/u);
     expect(evidence.confidence).toBe("observed");
     expect(evidence.authority).toBe("original-artifact");
@@ -148,6 +148,21 @@ describe("result kinds", () => {
     expect(ack.authority).toBe("analysis-state");
     const relabelled = withRecomputedId({ ...ack, authority: "original-artifact" });
     expect(issuePaths(relabelled)).toContain("result_kind");
+  });
+
+  it("never labels a mutation acknowledgement as an observation of the resulting state", () => {
+    const ack = create(
+      artifactDraft({
+        result_kind: "mutation-acknowledgement",
+        subject: stateSubject(1),
+        operation: { name: "rename", parameters: {} },
+      }),
+    );
+    expect(ack.confidence).toBe("reported");
+    // Presenting the acknowledgement as a state observation is rejected even with a recomputed identifier.
+    expect(issuePaths(withRecomputedId({ ...ack, confidence: "observed" }))).toContain("result_kind");
+    for (const [kind, semantics] of Object.entries(RESULT_KIND_SEMANTICS))
+      if (semantics.effect === "mutate") expect(semantics.confidence, kind).not.toBe("observed");
   });
 
   it("requires heuristic and assertion results to state their basis", () => {
