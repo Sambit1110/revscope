@@ -138,8 +138,18 @@ While the session is uncertain:
 
 Consistency returns only through `reconcile()`. It calls the provider's
 `observeState()`, adopts the fresh token, starts a new revision and clears the
-cache. If the observation fails, throws, or returns an invalid token, the
-session stays uncertain.
+cache. The session stays uncertain if the observation fails, throws, returns
+an invalid token, or is **stale**. An observation is stale when it reports a
+token the session already knows was replaced since its last verified state:
+
+- the token from before a mutation the provider reported as `partial` with
+  `stateEffect: "changed"`;
+- the verified token after a read reported a different one.
+
+Under the single-writer assumption the state cannot legitimately return to
+such a token without another change by this session. The cost is that a
+provider which wrongly reports a change, and then truthfully reports the
+old token, keeps the session uncertain until its token changes.
 
 Reads, mutations and reconciliation run one at a time in call order.
 `state()` and `snapshot()` are synchronous and never wait; they account for

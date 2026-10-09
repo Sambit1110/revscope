@@ -5,7 +5,7 @@ import type { AnalysisProvider } from "../../src/application/ports.js";
 import { AnalysisSession } from "../../src/application/session.js";
 import type { ResultKind } from "../../src/domain/evidence.js";
 import { errorEnvelopeSchema } from "../../src/domain/errors.js";
-import { gate, openControlled, openStubSession } from "../support/stub.js";
+import { gate, openControlled, openStubSession, stubFixture } from "../support/stub.js";
 
 const value = <T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T => {
   if (!result.ok) throw new Error(JSON.stringify(result.error));
@@ -404,6 +404,81 @@ describe("recovery through a fresh state token", () => {
     expect(failure(session.snapshot()).code).toBe("state_uncertain");
     value(await session.reconcile());
     expect(session.snapshot().ok).toBe(true);
+  });
+
+  it("refuses to recover to the token from before a change the provider reported", async () => {
+    const { session, provider } = await openControlled(stubFixture({ rename: { mode: "fail_items", addresses: ["0x2000"] } }));
+    const before = session.state().state_token ?? "";
+    expect(failure(await session.mutate("rename", { names: { "0x1000": "entry", "0x2000": "util" } })).details).toMatchObject({ state_effect: "changed" });
+    // A stale observation: the provider answers with the state it reported changing.
+    provider.tokenOverride = before;
+    const stale = failure(await session.reconcile());
+    expect(stale.code).toBe("provider_failure");
+    expect(stale.details["reason"]).toContain("stale");
+    expect(session.state()).toMatchObject({ consistency: "uncertain", state_token: null });
+    expect(failure(session.snapshot()).code).toBe("state_uncertain");
+    expect(failure(await session.mutate("rename", { names: { "0x3000": "fini" } })).code).toBe("state_uncertain");
+    provider.tokenOverride = undefined;
+    expect(value(await session.reconcile()).stateToken).toBe(provider.stub.stateToken());
+    expect(value(session.snapshot()).state_token).not.toBe(before);
+  });
+
+  it("refuses to recover to the verified token after a read showed it was replaced", async () => {
+    const { session, provider } = await openControlled();
+    const before = session.state().state_token ?? "";
+    await provider.stub.mutate("rename", { names: { "0x2000": "external" } });
+    expect(value(await session.read("get_name", { address: "0x2000" })).stateVerified).toBe(false);
+    provider.tokenOverride = before;
+    expect(failure(await session.reconcile()).details["reason"]).toContain("stale");
+    expect(session.state().consistency).toBe("uncertain");
+    provider.tokenOverride = undefined;
+    value(await session.reconcile());
+    expect(session.state()).toMatchObject({ consistency: "consistent", state_token: provider.stub.stateToken() });
+  });
+
+  it("detects a stale token on reads after recovery and does not cache the read", async () => {
+    const { session, provider } = await openControlled(stubFixture({ rename: { mode: "fail_items", addresses: ["0x2000"] } }));
+    const before = session.state().state_token ?? "";
+    failure(await session.mutate("rename", { names: { "0x1000": "entry", "0x2000": "util" } }));
+    value(await session.reconcile());
+    provider.tokenOverride = before;
+    const read = value(await session.read("get_name", { address: "0x1000" }));
+    expect(read).toMatchObject({ cache: "miss", stateVerified: false });
+    expect(session.state().consistency).toBe("uncertain");
+    provider.tokenOverride = undefined;
+    expect(value(await session.read("get_name", { address: "0x1000" })).cache).toBe("miss");
+  });
+
+  it("keeps a refresh queued behind a failing mutation from ending uncertainty when it fails", async () => {
+    const { session, provider } = await openControlled();
+    const hold = gate();
+    provider.mutationGate = hold.promise;
+    provider.raiseAfterMutation = true;
+    provider.observe = "fail";
+    const mutation = session.mutate("rename", { names: { "0x1000": "entry" } });
+    const refresh = session.reconcile();
+    await settle();
+    expect(session.state()).toMatchObject({ consistency: "uncertain", mutation_in_progress: true });
+    hold.release();
+    expect(failure(await mutation).code).toBe("partial_failure");
+    expect(failure(await refresh).code).toBe("provider_failure");
+    expect(session.state()).toMatchObject({ consistency: "uncertain", mutation_in_progress: false });
+    expect(failure(session.snapshot()).code).toBe("state_uncertain");
+    provider.raiseAfterMutation = false;
+    provider.observe = "real";
+    value(await session.reconcile());
+    expect(value(session.snapshot()).state_token).toBe(provider.stub.stateToken());
+  });
+
+  it("never serves knowledge cached before a partial failure once the session has recovered", async () => {
+    const { session, provider } = await openStubSession({ rename: { mode: "fail_items", addresses: ["0x2000"] } });
+    expect(value(await session.read("get_name", { address: "0x1000" })).evidence.payload).toEqual({ address: "0x1000", name: "main" });
+    failure(await session.mutate("rename", { names: { "0x1000": "entry", "0x2000": "util" } }));
+    value(await session.reconcile());
+    const fresh = value(await session.read("get_name", { address: "0x1000" }));
+    expect(fresh).toMatchObject({ cache: "miss", stateVerified: true, evidence: { payload: { name: "entry" } } });
+    expect(fresh.evidence.subject).toMatchObject({ state_token: provider.stateToken() });
+    expect(value(await session.read("get_name", { address: "0x1000" })).cache).toBe("hit");
   });
 
   it("rejects a read whose state token is invalid without changing state", async () => {

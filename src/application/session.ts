@@ -144,6 +144,13 @@ export class AnalysisSession {
   #uncertainty: Uncertainty | null = null;
   /** Mutations requested and not yet settled, oldest first. */
   readonly #pendingMutations: { readonly operation: string }[] = [];
+  /**
+   * Tokens the session has evidence were replaced since its last verified
+   * state: the token before a change the provider reported, or the verified
+   * token after a read revealed a different one. Recovering to one of them
+   * would adopt a stale observation, so reconcile refuses it.
+   */
+  #supersededTokens = new Set<string>();
   #tail: Promise<unknown> = Promise.resolve();
 
   private constructor(
@@ -384,12 +391,14 @@ export class AnalysisSession {
     if (!validToken(outcome.stateToken))
       return err(this.#providerFailure(operation, "The provider returned no valid state token."));
 
-    if (this.#uncertainty === null && outcome.stateToken !== this.#stateToken)
+    if (this.#uncertainty === null && outcome.stateToken !== this.#stateToken) {
       // The provider's state changed without this session's knowledge.
+      if (this.#stateToken !== null) this.#supersededTokens.add(this.#stateToken);
       this.#becomeUncertain(
         operation,
         "The provider reported a different state token than the one this session verified; the state changed outside the session.",
       );
+    }
     const verified = this.#uncertainty === null;
     const evidence = evidenceFromCapability(capability, {
       subject: this.#subject(outcome.stateToken),
@@ -438,8 +447,12 @@ export class AnalysisSession {
       );
     }
 
-    if (outcome.status === "partial")
+    if (outcome.status === "partial") {
+      // The provider itself says the state changed: the old token is no longer current.
+      if (outcome.stateEffect === "changed" && before.stateToken !== null)
+        this.#supersededTokens.add(before.stateToken);
       return err(this.#remainUncertain(operation, outcome.stateEffect, outcome.items, outcome.reason));
+    }
     if (!validToken(outcome.stateToken))
       return err(
         this.#remainUncertain(operation, "unknown", outcome.status === "applied" ? outcome.items : [], "The provider returned no valid state token for the mutation."),
@@ -482,6 +495,7 @@ export class AnalysisSession {
       );
     this.#stateToken = outcome.stateToken;
     this.#uncertainty = null;
+    this.#supersededTokens = new Set();
     this.#mutations.push(evidence.value);
     return ok({ evidence: evidence.value, items: outcome.items });
   }
@@ -515,6 +529,13 @@ export class AnalysisSession {
     if (observed.status === "failed") return err(this.#providerFailure("observe_state", observed.reason));
     if (!validToken(observed.stateToken))
       return err(this.#providerFailure("observe_state", "The provider returned no valid state token."));
+    if (this.#supersededTokens.has(observed.stateToken))
+      return err(
+        this.#providerFailure(
+          "observe_state",
+          "The provider reported a state this session already knows was replaced; the observation is stale.",
+        ),
+      );
 
     // A fresh authoritative token starts a new known epoch, committed only
     // once its observation has been recorded as valid evidence.
@@ -532,6 +553,7 @@ export class AnalysisSession {
     this.#cache = new Map();
     this.#stateToken = observed.stateToken;
     this.#uncertainty = null;
+    this.#supersededTokens = new Set();
     return ok({ evidence: evidence.value, stateToken: observed.stateToken, revision });
   }
 }

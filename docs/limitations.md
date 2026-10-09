@@ -24,7 +24,9 @@
   that does not change its token whenever its state changes defeats
   detection. The session also assumes it is the only writer of the provider's
   state; an outside change is noticed on the next provider round trip, not on
-  a cache hit.
+  a cache hit. Recovery refuses an observation that returns a token the
+  session knows was replaced. A provider that reports a change it did not
+  make therefore keeps the session uncertain until its token changes.
 - **Evidence identifiers prove integrity, not authenticity.** They are
   unkeyed digests: anyone can edit a record and recompute its identifier.
   Records loaded from files are unauthenticated.

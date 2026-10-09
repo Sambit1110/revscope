@@ -43,6 +43,10 @@ Revscope's first design fixed that, but a review found two further gaps:
 - **Only `reconcile()` recovers.** A successful `observeState()` with a valid
   token starts a new revision. A failed observation leaves the session
   uncertain.
+- **Stale observations do not recover.** The session remembers tokens it
+  knows were replaced since its last verified state: the token before a
+  change the provider reported, and a verified token that a read showed was
+  replaced. An observation returning one of them is refused as stale.
 - **Synchronous calls never wait, and never run ahead of a requested
   mutation.** Reads, mutations and reconciliation run one at a time, but
   `state()` and `snapshot()` are synchronous. A mutation is registered as
