@@ -77,7 +77,13 @@ export const ERROR_CATALOG = {
     category: "conflict",
     retryable: false,
     remediation:
-      "Reconcile the session with a fresh full-state read, then retry the snapshot or mutation.",
+      "Wait for pending mutations to finish, reconcile the session with a fresh state observation, then retry the snapshot or mutation.",
+  },
+  session_reentry: {
+    category: "conflict",
+    retryable: false,
+    remediation:
+      "A provider called back into the session that is waiting for it. Providers must not call their own session; correct the provider.",
   },
   provider_failure: {
     category: "execution_failure",

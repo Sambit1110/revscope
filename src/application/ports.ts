@@ -85,7 +85,8 @@ export type ProviderStateObservation =
 /**
  * A deep-analysis provider. Implementations may throw; the session treats an
  * exception during a mutation as an unknown effect on state. Providers must
- * not call back into the session that owns them.
+ * not call back into the session that owns them; such calls are refused with
+ * `session_reentry`.
  */
 export interface AnalysisProvider {
   readonly identity: ProviderIdentity;

@@ -43,9 +43,20 @@ Revscope's first design fixed that, but a review found two further gaps:
 - **Only `reconcile()` recovers.** A successful `observeState()` with a valid
   token starts a new revision. A failed observation leaves the session
   uncertain.
-- **Synchronous calls never wait.** Reads, mutations and reconciliation run
-  one at a time, but `state()` and `snapshot()` are synchronous. They report
-  the uncertainty that the queued operation has already recorded.
+- **Synchronous calls never wait, and never run ahead of a requested
+  mutation.** Reads, mutations and reconciliation run one at a time, but
+  `state()` and `snapshot()` are synchronous. A mutation is registered as
+  pending when `mutate()` is called, before it reaches the head of the queue,
+  so these calls report uncertainty for every requested mutation that has not
+  settled. (A follow-up review reproduced the race this closes: a snapshot
+  taken between `mutate()` and the start of its queued turn reported the
+  pre-mutation state as consistent.)
+- **Acknowledgements are validated before they are trusted.** An `applied`
+  outcome whose acknowledgement cannot be recorded as valid evidence leaves
+  the session uncertain.
+- **Re-entrant provider calls fail fast.** A provider that calls back into its
+  own session during an operation receives `session_reentry` instead of
+  deadlocking the queue.
 
 ## Consequences
 

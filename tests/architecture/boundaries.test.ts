@@ -39,7 +39,8 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
 /** Third-party and Node built-ins each layer may use. */
 const EXTERNAL: Readonly<Record<string, RegExp>> = {
   domain: /^(?:zod|node:crypto)$/u,
-  application: /^(?:zod|node:path)$/u,
+  // node:async_hooks lets the session detect providers calling back into it.
+  application: /^(?:zod|node:path|node:async_hooks)$/u,
   infrastructure: /^(?:zod|node:.+)$/u,
   interfaces: /^(?:zod|node:.+)$/u,
   "composition.ts": /^(?:zod|node:crypto)$/u,

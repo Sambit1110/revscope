@@ -60,8 +60,12 @@ export class ControlledProvider implements AnalysisProvider {
   readonly stub: StubAnalysisProvider;
   readonly identity;
   readonly artifactSha256;
+  /** When set, read waits for this before reading. */
+  readGate: Promise<void> | undefined;
   /** When set, mutate applies its change, then waits for this before replying. */
   mutationGate: Promise<void> | undefined;
+  /** When set, mutate runs this before applying its change, e.g. to call back into the session. */
+  duringMutate: (() => Promise<void>) | undefined;
   /** When set, mutate applies its change, then throws. */
   raiseAfterMutation = false;
   observe: "real" | "fail" | "raise" | "invalid" = "real";
@@ -83,6 +87,7 @@ export class ControlledProvider implements AnalysisProvider {
 
   async read(operation: string, parameters: JsonObject) {
     this.calls.push(`read:${operation}`);
+    if (this.readGate !== undefined) await this.readGate;
     const outcome = await this.stub.read(operation, parameters);
     return outcome.status === "ok" && this.tokenOverride !== undefined
       ? { ...outcome, stateToken: this.tokenOverride }
@@ -91,6 +96,7 @@ export class ControlledProvider implements AnalysisProvider {
 
   async mutate(operation: string, parameters: JsonObject): Promise<ProviderMutationOutcome> {
     this.calls.push(`mutate:${operation}`);
+    if (this.duringMutate !== undefined) await this.duringMutate();
     const outcome = this.nextMutationOutcome ?? (await this.stub.mutate(operation, parameters));
     this.nextMutationOutcome = undefined;
     if (this.mutationGate !== undefined) await this.mutationGate;

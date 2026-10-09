@@ -11,7 +11,7 @@ bin ──▶ interfaces ──▶ composition ──▶ infrastructure ──�
 | Layer | Directory | Owns | May import |
 |---|---|---|---|
 | Domain | `src/domain/` | Evidence model and label rules, capability semantics, error catalog and envelope, comparison, bundle validation, format sniffing, canonical JSON | `zod`, `node:crypto`, domain |
-| Application | `src/application/` | Ports, the mutation-aware `AnalysisSession`, the tool registry and `executeTool` | domain, `zod`, `node:path` |
+| Application | `src/application/` | Ports, the mutation-aware `AnalysisSession`, the tool registry and `executeTool` | domain, `zod`, `node:path`, `node:async_hooks` |
 | Infrastructure | `src/infrastructure/` | File readers, stub provider, environment policy, child-process launcher, logger | domain, application ports, Node built-ins |
 | Composition | `src/composition.ts` | Wires infrastructure into a `ToolContext` | everything except interfaces |
 | Interfaces | `src/interfaces/` | CLI, MCP server, configuration, output and exit codes | everything above |
@@ -91,13 +91,18 @@ string that the provider must change whenever its analysis state changes.
   to the revision and token at which they were recorded. While the session is
   consistent, a read whose token differs from the verified one means the state
   changed outside the session; the session becomes uncertain.
-- **Mutations** make the session uncertain *before* the provider is called.
-  `state()` reports `mutation_in_progress`, and `snapshot()` refuses, until
-  the provider replies.
+- **Mutations** count as in progress from the moment `mutate()` is called,
+  including while they wait behind earlier operations. From then until the
+  outcome is recorded, `state()` reports `consistency: "uncertain"` and
+  `mutation_in_progress: true`, and `snapshot()` refuses. The session also
+  records itself as uncertain before the provider is called, and returns to
+  consistent only after the outcome *and* its acknowledgement evidence have
+  been validated.
 
 | Mutation outcome | Possibly mutated | Session afterwards | Snapshot |
 |---|---|---|---|
-| Applied, with a valid new token | yes (known) | consistent at the new token; cache cleared | allowed |
+| Applied, with a valid new token and recordable acknowledgement | yes (known) | consistent at the new token; cache cleared | allowed |
+| Applied, but the acknowledgement is not valid evidence | yes | **uncertain** | **refused** |
 | Rejected, token unchanged | no (verified) | consistent; earlier cache kept | allowed |
 | Rejected, but token changed | unknown | **uncertain** | **refused** |
 | Partial (some items applied) | yes | **uncertain** | **refused** |
@@ -118,9 +123,17 @@ cache. If the observation fails, throws, or returns an invalid token, the
 session stays uncertain.
 
 Reads, mutations and reconciliation run one at a time in call order.
-`state()` and `snapshot()` are synchronous and never wait. Providers must not
-call back into the session that owns them; such a call would queue behind the
-operation that made it.
+`state()` and `snapshot()` are synchronous and never wait; they account for
+every mutation that has been requested and not yet settled, not only the one
+the provider is currently running. A read issued before a mutation still runs
+first and describes the pre-mutation state.
+
+Providers must not call back into the session that owns them: such a call
+would queue behind the operation that made it and deadlock. The session marks
+each operation's asynchronous context (`AsyncLocalStorage`), and a call that
+arrives from inside it is refused immediately with `session_reentry`. The
+check follows Node's asynchronous context propagation; a callback that a
+provider routes through a mechanism that drops that context is not detected.
 
 **Trust assumptions:** the session assumes it is the only writer of the
 provider's state. A change made outside the session is detected on the next

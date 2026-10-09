@@ -120,6 +120,98 @@ describe("mutation in progress (regression for the snapshot race)", () => {
     expect(failure(session.snapshot()).code).toBe("state_uncertain");
   });
 
+  it("treats a mutation as in progress from the moment it is requested", async () => {
+    const { session } = await openControlled();
+    expect(session.snapshot().ok).toBe(true);
+    const mutation = session.mutate("rename", { names: { "0x1000": "entry" } });
+    // No await: the provider has not even been called yet.
+    expect(session.state()).toMatchObject({ consistency: "uncertain", mutation_in_progress: true, state_token: null });
+    expect(failure(session.snapshot()).details).toMatchObject({ mutation_in_progress: true });
+    value(await mutation);
+    expect(session.state()).toMatchObject({ consistency: "consistent", mutation_in_progress: false });
+  });
+
+  it("never exposes the old state while a mutation waits behind a slow read and then delays its reply", async () => {
+    const { session, provider } = await openControlled();
+    const readHold = gate();
+    const mutationHold = gate();
+    provider.readGate = readHold.promise;
+    provider.mutationGate = mutationHold.promise;
+    const before = session.state().state_token;
+
+    const read = session.read("get_name", { address: "0x1000" });
+    const mutation = session.mutate("rename", { names: { "0x1000": "entry" } });
+    await settle();
+    // The mutation is only queued: the provider has not seen it, yet the old view is withheld.
+    expect(provider.calls).toEqual(["observe_state", "read:get_name"]);
+    expect(session.state()).toMatchObject({ consistency: "uncertain", mutation_in_progress: true });
+    expect(failure(session.snapshot()).code).toBe("state_uncertain");
+
+    readHold.release();
+    // The read was issued first, so it describes the pre-mutation state, verified.
+    expect(value(await read)).toMatchObject({ stateVerified: true, evidence: { payload: { name: "main" } } });
+    await settle();
+    // The provider has applied the change but not replied.
+    expect(provider.stub.currentNames()["0x1000"]).toBe("entry");
+    expect(failure(session.snapshot()).code).toBe("state_uncertain");
+
+    mutationHold.release();
+    value(await mutation);
+    const snapshot = value(session.snapshot());
+    expect(snapshot.state_token).toBe(provider.stub.stateToken());
+    expect(snapshot.state_token).not.toBe(before);
+    expect(snapshot.mutations).toHaveLength(1);
+  });
+
+  it("returns to the verified state when a requested mutation is refused before reaching the provider", async () => {
+    const { session, provider } = await openControlled();
+    const refused = session.mutate("rename", { names: {} });
+    expect(session.state().consistency).toBe("uncertain");
+    expect(failure(await refused).code).toBe("invalid_input");
+    expect(provider.calls).toEqual(["observe_state"]);
+    expect(session.state()).toMatchObject({ consistency: "consistent", mutation_in_progress: false });
+    expect(session.snapshot().ok).toBe(true);
+  });
+
+  it("stays uncertain when an applied mutation's acknowledgement cannot be recorded", async () => {
+    const { session, provider } = await openControlled();
+    provider.nextMutationOutcome = {
+      status: "applied",
+      items: [{ key: "0x1000", status: "applied" }],
+      payload: Number.NaN,
+      stateToken: "after-unrecordable-change",
+    };
+    const error = failure(await session.mutate("rename", { names: { "0x1000": "entry" } }));
+    expect(error).toMatchObject({ code: "partial_failure", details: { possibly_mutated: true, state_effect: "unknown" } });
+    expect(session.state()).toMatchObject({ consistency: "uncertain", state_token: null });
+    expect(failure(session.snapshot()).code).toBe("state_uncertain");
+  });
+
+  it("refuses a provider calling back into its own session instead of deadlocking", async () => {
+    const { session, provider } = await openControlled();
+    const reentrant: { code: string }[] = [];
+    provider.duringMutate = async () => {
+      for (const call of [
+        () => session.read("get_name", { address: "0x1000" }),
+        () => session.mutate("rename", { names: { "0x2000": "nested" } }),
+        () => session.reconcile(),
+      ]) {
+        const result = await call();
+        if (!result.ok) reentrant.push({ code: result.error.code });
+      }
+    };
+    const deadlocked = new Promise<"deadlocked">((resolve) => {
+      setTimeout(() => resolve("deadlocked"), 2000).unref();
+    });
+    const outcome = await Promise.race([session.mutate("rename", { names: { "0x1000": "entry" } }), deadlocked]);
+    expect(outcome).not.toBe("deadlocked");
+    expect(reentrant).toEqual([{ code: "session_reentry" }, { code: "session_reentry" }, { code: "session_reentry" }]);
+    expect(value(outcome as never)).toMatchObject({ evidence: { result_kind: "mutation-acknowledgement" } });
+    expect(provider.stub.currentNames()["0x2000"]).toBe("helper");
+    // Ordinary callers are unaffected afterwards.
+    expect(value(await session.read("get_name", { address: "0x1000" })).evidence.payload).toEqual({ address: "0x1000", name: "entry" });
+  });
+
   it("runs concurrent operations one at a time in call order", async () => {
     const { session, provider } = await openControlled();
     const hold = gate();

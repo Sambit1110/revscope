@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import {
   capabilityIssues,
   evidenceFromCapability,
@@ -33,7 +35,7 @@ export interface Uncertainty {
 
 export interface SessionState {
   readonly consistency: "consistent" | "uncertain";
-  /** True while a mutation has been handed to the provider and has not returned. */
+  /** True from the moment a mutation is requested until its outcome is recorded, including while it waits its turn. */
   readonly mutation_in_progress: boolean;
   /** Increments whenever cached knowledge stops describing the current state. */
   readonly revision: number;
@@ -90,6 +92,8 @@ const UNVERIFIED_UNKNOWN: EvidenceUnknown = {
 };
 
 const MUTATION_IN_PROGRESS = "A mutation is in progress; its effect is not yet known.";
+const MUTATION_PENDING =
+  "A mutation has been requested and has not completed; its effect is not yet known.";
 
 const itemsJson = (items: readonly ItemOutcome[]) =>
   items.map(({ key, status }) => ({ key, status }));
@@ -104,16 +108,29 @@ const validToken = (value: unknown): value is string =>
   stateTokenSchema.safeParse(value).success;
 
 /**
+ * Marks the asynchronous context of each queued operation with the session
+ * running it, so a provider calling back into that session is detected
+ * instead of queueing behind the operation it is part of.
+ */
+const activeOperation = new AsyncLocalStorage<AnalysisSession>();
+
+/**
  * One provider-backed analysis session.
  *
  * Invariants:
  * - Reads are served from the cache only while the session is consistent, and
  *   only for entries recorded at the current revision and verified token.
- * - A mutation makes the session uncertain before the provider is called, so
- *   `state()` and `snapshot()` never report stale state as consistent.
+ * - A mutation counts as in progress from the moment `mutate()` is called,
+ *   including while it waits behind earlier operations, until its outcome is
+ *   recorded. Throughout, `state()` reports uncertainty and `snapshot()`
+ *   refuses, so neither can present the pre-mutation view as current.
+ * - The session becomes uncertain before the provider is called, and returns
+ *   to consistent only after the outcome and its evidence have been validated.
  * - Only a fresh `observeState()` result can end uncertainty. Ordinary reads
  *   never do.
- * - Reads, mutations, and reconciliation run one at a time in call order.
+ * - Reads, mutations, and reconciliation run one at a time in call order. A
+ *   provider calling back into the session during one of them is refused with
+ *   `session_reentry` rather than deadlocking.
  */
 export class AnalysisSession {
   readonly #provider: AnalysisProvider;
@@ -125,7 +142,8 @@ export class AnalysisSession {
   #revision = 0;
   #stateToken: string | null = null;
   #uncertainty: Uncertainty | null = null;
-  #mutationInProgress = false;
+  /** Mutations requested and not yet settled, oldest first. */
+  readonly #pendingMutations: { readonly operation: string }[] = [];
   #tail: Promise<unknown> = Promise.resolve();
 
   private constructor(
@@ -165,42 +183,56 @@ export class AnalysisSession {
     return observed.ok ? ok(session) : observed;
   }
 
+  /** What is currently known; a pending mutation always reads as uncertain. */
   state(): SessionState {
+    const uncertainty = this.#currentUncertainty();
     return {
-      consistency: this.#uncertainty === null ? "consistent" : "uncertain",
-      mutation_in_progress: this.#mutationInProgress,
+      consistency: uncertainty === null ? "consistent" : "uncertain",
+      mutation_in_progress: this.#pendingMutations.length > 0,
       revision: this.#revision,
-      state_token: this.#uncertainty === null ? this.#stateToken : null,
-      uncertainty: this.#uncertainty,
+      state_token: uncertainty === null ? this.#stateToken : null,
+      uncertainty,
     };
   }
 
   /** Read through the cache while consistent; always go to the provider otherwise. */
   read(operation: string, parameters: unknown): Promise<Result<ReadResult, ErrorEnvelope>> {
-    return this.#exclusive(() => this.#read(operation, parameters));
+    return this.#exclusive("read", () => this.#read(operation, parameters));
   }
 
   /** Apply a mutation and record exactly what is known about its effect. */
   mutate(operation: string, parameters: unknown): Promise<Result<MutationResult, ErrorEnvelope>> {
-    return this.#exclusive(() => this.#mutate(operation, parameters));
+    const reentry = this.#reentry("mutate");
+    if (reentry !== null) return Promise.resolve(err(reentry));
+    // Registered synchronously: from this call on, nothing may report the
+    // pre-mutation state as current, even before the mutation's turn comes.
+    const pending = { operation };
+    this.#pendingMutations.push(pending);
+    const settled = () => {
+      this.#pendingMutations.splice(this.#pendingMutations.indexOf(pending), 1);
+    };
+    const run = this.#exclusive("mutate", () => this.#mutate(operation, parameters));
+    run.then(settled, settled);
+    return run;
   }
 
   /** Observe the provider's state token afresh; the only way to end uncertainty. */
   reconcile(): Promise<Result<ReconcileResult, ErrorEnvelope>> {
-    return this.#exclusive(() => this.#reconcile());
+    return this.#exclusive("reconcile", () => this.#reconcile());
   }
 
   /**
    * Export cached knowledge for the current verified state, or refuse while
-   * the state is uncertain, including while a mutation is in progress.
+   * the state is uncertain, including while any mutation is pending.
    */
   snapshot(): Result<SessionSnapshot, ErrorEnvelope> {
-    if (this.#uncertainty !== null || this.#stateToken === null)
+    const uncertainty = this.#currentUncertainty();
+    if (uncertainty !== null || this.#stateToken === null)
       return err(
         makeError("state_uncertain", "A snapshot cannot be exported while the session state is uncertain", {
           state_revision: this.#revision,
-          mutation_in_progress: this.#mutationInProgress,
-          uncertainty: this.#uncertainty === null ? null : { ...this.#uncertainty },
+          mutation_in_progress: this.#pendingMutations.length > 0,
+          uncertainty: uncertainty === null ? null : { ...uncertainty },
         }),
       );
     const stateToken = this.#stateToken;
@@ -224,8 +256,31 @@ export class AnalysisSession {
     });
   }
 
-  #exclusive<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.#tail.then(task, task);
+  /** Recorded uncertainty, or the uncertainty implied by a pending mutation. */
+  #currentUncertainty(): Uncertainty | null {
+    if (this.#uncertainty !== null) return this.#uncertainty;
+    const [oldest] = this.#pendingMutations;
+    return oldest === undefined ? null : { operation: oldest.operation, reason: MUTATION_PENDING };
+  }
+
+  /** A call made from inside one of this session's own operations cannot be queued safely. */
+  #reentry(method: string): ErrorEnvelope | null {
+    if (activeOperation.getStore() !== this) return null;
+    this.#logger?.error({ event: "session_reentry", operation: method });
+    return makeError("session_reentry", `${method} was called from inside an operation of the same session`, {
+      method,
+    });
+  }
+
+  /** Queue a task behind every earlier operation and run it marked as this session's. */
+  #exclusive<T>(
+    method: string,
+    task: () => Promise<Result<T, ErrorEnvelope>>,
+  ): Promise<Result<T, ErrorEnvelope>> {
+    const reentry = this.#reentry(method);
+    if (reentry !== null) return Promise.resolve(err(reentry));
+    const marked = () => activeOperation.run(this, task);
+    const run = this.#tail.then(marked, marked);
     this.#tail = run.catch(() => undefined);
     return run;
   }
@@ -234,12 +289,12 @@ export class AnalysisSession {
     return [...this.#capabilities.keys()].toSorted();
   }
 
-  #subject(stateToken: string): Subject {
+  #subject(stateToken: string, revision = this.#revision): Subject {
     return {
       kind: "analysis-state",
       artifact_sha256: this.#provider.artifactSha256,
       session_id: this.#sessionId,
-      state_revision: this.#revision,
+      state_revision: revision,
       state_token: stateToken,
     };
   }
@@ -362,7 +417,6 @@ export class AnalysisSession {
     // the state may change at any moment, whatever the provider later reports.
     const before = { cache: this.#cache, stateToken: this.#stateToken };
     this.#becomeUncertain(operation, MUTATION_IN_PROGRESS);
-    this.#mutationInProgress = true;
     let outcome;
     try {
       outcome = await this.#provider.mutate(operation, parameters);
@@ -371,8 +425,6 @@ export class AnalysisSession {
       return err(
         this.#remainUncertain(operation, "unknown", [], "The provider raised an exception during the mutation; its effect on analysis state is unknown."),
       );
-    } finally {
-      this.#mutationInProgress = false;
     }
 
     if (outcome.status === "partial")
@@ -403,8 +455,8 @@ export class AnalysisSession {
       );
     }
 
-    this.#stateToken = outcome.stateToken;
-    this.#uncertainty = null;
+    // Validate the acknowledgement before trusting it: an applied change that
+    // cannot be recorded leaves the session uncertain, never silently consistent.
     const evidence = evidenceFromCapability(capability, {
       subject: this.#subject(outcome.stateToken),
       parameters,
@@ -413,7 +465,12 @@ export class AnalysisSession {
       unknowns: [],
       limitations: [],
     });
-    if (!evidence.ok) return evidence;
+    if (!evidence.ok)
+      return err(
+        this.#remainUncertain(operation, "unknown", outcome.items, "The provider reported the mutation as applied, but its acknowledgement could not be recorded as valid evidence."),
+      );
+    this.#stateToken = outcome.stateToken;
+    this.#uncertainty = null;
     this.#mutations.push(evidence.value);
     return ok({ evidence: evidence.value, items: outcome.items });
   }
@@ -448,13 +505,11 @@ export class AnalysisSession {
     if (!validToken(observed.stateToken))
       return err(this.#providerFailure("observe_state", "The provider returned no valid state token."));
 
-    // A fresh authoritative token starts a new known epoch.
-    this.#revision += 1;
-    this.#cache = new Map();
-    this.#stateToken = observed.stateToken;
-    this.#uncertainty = null;
+    // A fresh authoritative token starts a new known epoch, committed only
+    // once its observation has been recorded as valid evidence.
+    const revision = this.#revision + 1;
     const evidence = evidenceFromCapability(OBSERVE_STATE, {
-      subject: this.#subject(observed.stateToken),
+      subject: this.#subject(observed.stateToken, revision),
       parameters: {},
       payload: { state_token: observed.stateToken },
       producer: this.#provider.identity,
@@ -462,6 +517,10 @@ export class AnalysisSession {
       limitations: [],
     });
     if (!evidence.ok) return evidence;
-    return ok({ evidence: evidence.value, stateToken: observed.stateToken, revision: this.#revision });
+    this.#revision = revision;
+    this.#cache = new Map();
+    this.#stateToken = observed.stateToken;
+    this.#uncertainty = null;
+    return ok({ evidence: evidence.value, stateToken: observed.stateToken, revision });
   }
 }
