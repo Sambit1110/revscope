@@ -137,8 +137,9 @@ public class RevscopeExport extends HeadlessScript {
 			function.getEntryPoint().getAddressSpace().equals(defaultSpace);
 	}
 
+	// analysisTimeoutOccurred() declares the checked ImproperUseException.
 	private String header(Program program, int maxFunctions, boolean decompile,
-			int decompileTimeoutSeconds) {
+			int decompileTimeoutSeconds) throws Exception {
 		StringBuilder entries = new StringBuilder("[");
 		AddressIterator entryPoints = program.getSymbolTable().getExternalEntryPointIterator();
 		int count = 0;

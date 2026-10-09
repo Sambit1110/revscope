@@ -95,6 +95,11 @@ describe("Revscope's Ghidra export script", () => {
     expect(text).toContain(`args.length != ${String(scriptArgs.length)}`);
   });
 
+  it("declares the checked exception that analysisTimeoutOccurred() throws (Ghidra 12.1.4 API)", async () => {
+    // Without a Java compiler in this environment, this guards the one known compile hazard.
+    expect(await script()).toMatch(/private String header\([^)]*\)\s*throws Exception \{/u);
+  });
+
   it("starts no processes and touches no files except the export", async () => {
     const text = await script();
     for (const forbidden of ["Runtime.getRuntime", "ProcessBuilder", "exec(", "Files.delete", "java.net", "runScript(", "Emulator"])
