@@ -27,12 +27,7 @@ export const inspectArtifactTool = defineTool({
     const facts = await context.artifactReader.read(path);
     if (!facts.ok) return facts;
     const { displayName, sizeBytes, sha256, header } = facts.value;
-    const subject: Subject = {
-      kind: "artifact",
-      sha256,
-      size_bytes: sizeBytes,
-      display_name: displayName,
-    };
+    const subject: Subject = { kind: "artifact", sha256, size_bytes: sizeBytes };
     const identity = evidenceFromCapability(ARTIFACT_IDENTITY, {
       subject,
       parameters: {},

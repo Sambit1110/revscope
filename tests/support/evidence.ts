@@ -11,7 +11,6 @@ export const artifactDraft = (
     kind: "artifact",
     sha256: ARTIFACT_SHA,
     size_bytes: 12,
-    display_name: "sample.bin",
   },
   operation: { name: "artifact_identity", parameters: {} },
   producer: { id: "test", version: "1" },

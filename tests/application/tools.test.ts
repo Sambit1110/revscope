@@ -79,17 +79,21 @@ describe("inspect_artifact", () => {
     ]);
   });
 
-  it("gives the same evidence identifiers for identical bytes at different paths", async () => {
+  it("gives the same evidence identifiers for identical bytes under different paths and names", async () => {
     const { context } = testContext();
     const directory = await tempDir();
     await writeFile(join(directory, "a.txt"), "same");
     await mkdir(join(directory, "nested"));
-    await writeFile(join(directory, "nested", "a.txt"), "same");
+    await writeFile(join(directory, "nested", "renamed.bin"), "same");
     const first = success(await executeTool(context, "inspect_artifact", { path: join(directory, "a.txt") }));
-    const second = success(await executeTool(context, "inspect_artifact", { path: join(directory, "nested", "a.txt") }));
+    const second = success(await executeTool(context, "inspect_artifact", { path: join(directory, "nested", "renamed.bin") }));
     expect(first.records.map(({ evidence_id }) => evidence_id)).toEqual(
       second.records.map(({ evidence_id }) => evidence_id),
     );
+    // The name is still reported, beside the evidence rather than inside it.
+    expect(first.data["display_name"]).toBe("a.txt");
+    expect(second.data["display_name"]).toBe("renamed.bin");
+    expect(JSON.stringify(second.records)).not.toContain("renamed.bin");
   });
 
   it.each([

@@ -83,7 +83,7 @@ describe("evidence creation", () => {
 
   it.each([
     ["result_kind", { result_kind: "observed-fact" }],
-    ["subject.sha256", { subject: { kind: "artifact", sha256: "XYZ", size_bytes: 1, display_name: "x" } }],
+    ["subject.sha256", { subject: { kind: "artifact", sha256: "XYZ", size_bytes: 1 } }],
     ["operation.name", { operation: { name: "Bad Name", parameters: {} } }],
     ["payload", { payload: Number.POSITIVE_INFINITY }],
   ])("rejects malformed %s", (_field, override) => {

@@ -99,7 +99,7 @@ describe("evidence from a capability", () => {
   it("refuses a subject kind the result kind does not allow", () => {
     const evidence = evidenceFromCapability(
       capability(),
-      input({ kind: "artifact", sha256: "a".repeat(64), size_bytes: 1, display_name: "x" } as never),
+      input({ kind: "artifact", sha256: "a".repeat(64), size_bytes: 1 } as never),
     );
     expect(evidence.ok).toBe(false);
     if (!evidence.ok) expect(evidence.error.code).toBe("evidence_integrity");

@@ -36,7 +36,7 @@ export const reportEvidenceTool = defineTool({
   name: "report_evidence",
   title: "Report evidence bundle",
   description:
-    "Validate every record in an evidence bundle (any JSON object with a records array, including Revscope tool output) and report counts by confidence, authority, and operation, together with unknowns, limitations, and the records that failed validation.",
+    "Validate every record in an evidence bundle (any JSON object with a records array, including Revscope tool output) and report counts by confidence, authority, and operation, together with unknowns, limitations, repeated records (counted once), and the records that failed validation.",
   readOnly: true,
   input: z.strictObject({ path: absolutePathSchema }),
   run: async ({ path }, context) => {

@@ -48,8 +48,12 @@
   parameters:
   - Analysis-state subjects are compared by artifact digest, ignoring the
     session and revision.
-  - Several records answering the same question are reported as `ambiguous`
-    instead of being paired.
+  - Several different records answering the same question are reported as
+    `ambiguous` instead of being paired, unless both sides hold exactly the
+    same records. Repeated records (same identifier) count once.
+- **Artifact evidence is identified by content only.** The subject is the
+  SHA-256 and size; the file name is reported in the tool's `data`, not in
+  the evidence, so renaming or moving a file does not change its evidence.
 
 ## Verification
 

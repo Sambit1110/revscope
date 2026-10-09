@@ -32,9 +32,13 @@ export interface EvidenceComparison {
   readonly entries: readonly ComparisonEntry[];
 }
 
+/** Group distinct records by question; a repeated identifier is kept once. */
 const groupByKey = (records: readonly Evidence[]): Map<string, Evidence[]> => {
   const groups = new Map<string, Evidence[]>();
+  const seen = new Set<string>();
   for (const record of records) {
+    if (seen.has(record.evidence_id)) continue;
+    seen.add(record.evidence_id);
     const key = evidenceKey(record);
     const group = groups.get(key);
     if (group === undefined) groups.set(key, [record]);
@@ -49,8 +53,15 @@ const labels = (evidence: Evidence): LabelSet => ({
   authority: evidence.authority,
 });
 
+/** Sorted distinct identifiers; duplicates of one record count once. */
 const ids = (records: readonly Evidence[] | undefined): string[] =>
-  (records ?? []).map(({ evidence_id }) => evidence_id).toSorted();
+  [...new Set((records ?? []).map(({ evidence_id }) => evidence_id))].toSorted();
+
+const sameIds = (left: readonly Evidence[], right: readonly Evidence[]): boolean => {
+  const a = ids(left);
+  const b = ids(right);
+  return a.length === b.length && a.every((id, index) => id === b[index]);
+};
 
 const classify = (
   left: readonly Evidence[] | undefined,
@@ -58,6 +69,9 @@ const classify = (
 ): Pick<ComparisonEntry, "status" | "label_change"> => {
   if (left === undefined) return { status: "added", label_change: null };
   if (right === undefined) return { status: "removed", label_change: null };
+  // The same records on both sides are unchanged however many there are, so
+  // comparing a bundle with itself never reports ambiguity.
+  if (sameIds(left, right)) return { status: "unchanged", label_change: null };
   const [before] = left;
   const [after] = right;
   // Several records answering the same question on one side cannot be paired

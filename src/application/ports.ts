@@ -8,6 +8,7 @@ import type { Result } from "../domain/result.js";
 
 /** Facts read from a local artifact without executing or interpreting it. */
 export interface ArtifactFacts {
+  /** Local file name, for display only; never part of evidence identity. */
   readonly displayName: string;
   readonly sizeBytes: number;
   readonly sha256: string;

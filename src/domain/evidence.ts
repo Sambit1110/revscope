@@ -156,11 +156,12 @@ export const operationNameSchema = z
   .regex(/^[a-z][a-z0-9_]*$/, "Must be a lowercase snake_case operation name");
 
 export const subjectSchema = z.discriminatedUnion("kind", [
+  // An artifact is identified by its content alone. File names are local
+  // context, so they are reported beside the evidence, never inside it.
   z.strictObject({
     kind: z.literal("artifact"),
     sha256: sha256Schema,
     size_bytes: z.number().int().nonnegative(),
-    display_name: z.string().min(1).max(255),
   }),
   z.strictObject({
     kind: z.literal("analysis-state"),
