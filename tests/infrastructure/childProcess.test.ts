@@ -182,6 +182,33 @@ describe.skipIf(!posix)("process lifecycle on POSIX", () => {
     }
   });
 
+  it("does not report a failure while the dead group's members are unreaped zombies (macOS EPERM)", async () => {
+    // On macOS, kill(-pgid, ...) returns EPERM, not ESRCH, while every member of
+    // the group is a zombie. Reproduce that window deterministically: the first
+    // answers that would be ESRCH are reported as EPERM, as Darwin does.
+    let zombieAnswers = 3;
+    const darwinZombies: ProcessControl = {
+      platform: process.platform,
+      kill: (pid, signal) => {
+        try {
+          process.kill(pid, signal);
+        } catch (cause: unknown) {
+          if (pid < 0 && (cause as NodeJS.ErrnoException).code === "ESRCH" && zombieAnswers > 0) {
+            zombieAnswers -= 1;
+            throw Object.assign(new Error("zombie group"), { code: "EPERM" });
+          }
+          throw cause;
+        }
+      },
+    };
+    const outcome = await run(family("linger"), darwinZombies);
+    const pids = pidsFrom(outcome.stdout);
+    expect(zombieAnswers).toBe(0);
+    expect(outcome.cleanup).toEqual({ status: "terminated", scope: "process-group", reason: null });
+    expect(alive(pids.child)).toBe(false);
+    expect(alive(pids.grandchild ?? -1)).toBe(false);
+  });
+
   it("reports termination failure and still returns within the bound", async () => {
     const denied: ProcessControl = {
       platform: process.platform,

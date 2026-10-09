@@ -239,7 +239,7 @@ also closed them, it is not detected.
 | Normal exit | ~70 ms | not-needed |
 | Grandchild holds the pipes | ~305 ms | terminated |
 | Grandchild holds the pipes and ignores SIGTERM | ~570 ms | terminated |
-| Grandchild escapes the group, holding the pipes | ~1050 ms (the deadline) | failed |
+| Grandchild escapes the group, holding the pipes | ~800 ms | failed |
 | Child ignores SIGTERM | ~810 ms | terminated |
 | Signalling denied (simulated EPERM) | ≤ 1050 ms + latency | failed |
 

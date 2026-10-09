@@ -30,12 +30,17 @@ It also had no cancellation.
 - **Nothing in the group outlives the run.** Settling re-sends SIGKILL until
   the group is gone, then waits for the pipes to close, up to the deadline.
 - **Escapes are reported, not hidden.** If the group is gone but the pipes
-  are still held open at the deadline, a descendant left the group. It is not
+  are still held open 250 ms later, a descendant left the group. It is not
   signalled, and cleanup is reported as `failed` instead of `terminated`.
-  Revscope waits until the deadline, not a short grace period, before
-  concluding this: under load, the pipes of a cleanly terminated group can be
-  observed closing well after its processes die. A 100 ms grace produced
-  false `failed` reports in a loaded test run.
+  (Measured on macOS under load: a cleanly terminated group's pipes close
+  within 0.2 ms of the group disappearing.)
+- **EPERM is not proof of failure on macOS.** While every member of a
+  group is an unreaped zombie, `kill(-pgid, …)` returns EPERM rather than
+  ESRCH. Revscope therefore treats EPERM from the group as unconfirmed and
+  keeps polling. Only a group that still exists at the deadline after EPERM
+  is reported as a termination failure. (Phase 4.1: treating EPERM as an
+  immediate failure misreported clean terminations as `failed` in 40 of
+  180 loaded runs.)
 - **The result says what happened.** It reports why the run ended (`exited`,
   `timed-out` or `cancelled`) separately from cleanup (`not-needed`,
   `terminated` or `failed`, with a reason).
