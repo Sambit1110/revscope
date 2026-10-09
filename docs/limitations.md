@@ -13,7 +13,8 @@
   `runChild` are implemented and tested, but no tool uses them.
 - **Process-tree termination is POSIX-only.** It relies on process groups:
   - A descendant that leaves the group (for example with `setsid`) is not
-    terminated.
+    terminated. It is reported as a cleanup failure only while it holds the
+    output pipes.
   - On Windows only the direct child is signalled; this is unverified.
   - Process-group behaviour has been exercised only on macOS.
 - **Sessions do not persist.** Each `stub-analysis` invocation and each MCP

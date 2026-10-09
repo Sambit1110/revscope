@@ -174,32 +174,67 @@ inherited, absent, set), never values.
 
 `runChild` (`src/infrastructure/childProcess.ts`) is the only code that
 starts processes. It runs the child without a shell: an absolute executable
-path, an argument vector, NUL bytes rejected.
+path, an argument vector, and NUL bytes rejected in the executable, the
+working directory and the arguments.
 
-**Lifecycle on POSIX (verified on macOS):**
+**One deadline.** Every run has a hard deadline of
+`timeoutMs + killGraceMs + settleMs` (defaults: 500 ms grace, 250 ms
+settle), reported as `deadlineMs`. Cancellation shortens it to
+`killGraceMs + settleMs` after the abort. Every phase, including
+collecting output from descendants and verifying that the tree is gone,
+stops at the deadline, so the run returns by then plus event-loop latency.
+The tests allow 150 ms of latency.
 
-- The child leads a new process group. On deadline or cancellation (an
-  `AbortSignal`), the whole group receives SIGTERM, then SIGKILL after
-  `killGraceMs` (default 500 ms).
-- Only that group is ever signalled.
-- After the child exits, remaining output is collected for at most `drainMs`
-  (default 250 ms). After that, descendants that still hold the pipes are
-  killed and the streams are closed.
-- When the run ends, any remaining group member is killed, including a
-  descendant that closed its output. The run then waits up to 500 ms for the
-  group to disappear.
+**Lifecycle on POSIX (verified on macOS only):**
 
-**Result:** `termination` (`exited`, `timed-out` or `cancelled`), the exit
-code and signal, and `cleanup.status` (`not-needed`, `terminated` or
-`failed`, with a reason).
+- The child leads a new process group. At `timeoutMs`, or on cancellation
+  through an `AbortSignal`, the whole group receives SIGTERM, then SIGKILL
+  after `killGraceMs`.
+- Only that group is ever signalled. Once the group has been observed gone,
+  it is never signalled again, so a later reuse of its ID is not hit.
+- After the child exits, output still arriving from descendants is collected
+  for at most `drainMs` (default 250 ms), never past the deadline. Then the
+  run settles.
+- Settling kills any remaining group member, including a descendant that
+  closed its output, re-sending SIGKILL until the group is gone. It then
+  waits for the output pipes to close, never past the deadline.
 
-**Timing bound:** a run returns no later than about
-`timeoutMs + killGraceMs + drainMs + 250 ms + 500 ms` (about `timeoutMs` +
-1.5 s with the defaults). In the lifecycle tests, a 300 ms deadline with a
-lingering grandchild returned in about 300–350 ms.
+**Result:**
+
+- `termination` says why the run ended: `exited`, `timed-out` or
+  `cancelled`.
+- The exit code and signal.
+- `cleanup.status` says whether everything the run started is gone:
+  - `not-needed`: the tree ended by itself.
+  - `terminated`: Revscope signalled the tree and it is gone.
+  - `failed`: a termination failure, with a reason. Signalling failed, group
+    members were still running at the deadline, or the output pipes were
+    still held open after the group ended.
+- `outputComplete` is false when output was cut off.
+
+**Escaped descendants.** A descendant that leaves the group (for example by
+starting its own session) is not signalled, because Revscope cannot tell it
+apart from an unrelated process without inspecting the system process table.
+If it still holds the output pipes, cleanup is reported as `failed`. If it
+also closed them, it is not detected.
+
+**Measured on macOS** with `timeoutMs` 300, `killGraceMs` 500, `drainMs`
+250, `settleMs` 250 (deadline 1050 ms):
+
+| Scenario | Returned after | Cleanup |
+|---|---|---|
+| Normal exit | ~70 ms | not-needed |
+| Grandchild holds the pipes | ~305 ms | terminated |
+| Grandchild holds the pipes and ignores SIGTERM | ~570 ms | terminated |
+| Grandchild escapes the group, holding the pipes | ~660 ms | failed |
+| Child ignores SIGTERM | ~810 ms | terminated |
+| Signalling denied (simulated EPERM) | ≤ 1050 ms + latency | failed |
 
 **Windows:** only the direct child is signalled (`cleanup.scope:
-"direct-child-only"`), and descendants are not tracked. This is unverified.
+"direct-child-only"`), and descendants are not tracked. If they keep the
+output pipes open, cleanup is reported as `failed`. None of this has been
+run on Windows. Linux uses the same POSIX mechanism but has not been run
+either.
 
 No tool in this milestone launches external programs. The lifecycle is tested
 with the Node.js runtime running test-owned scripts.

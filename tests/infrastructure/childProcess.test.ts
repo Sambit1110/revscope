@@ -7,11 +7,15 @@ import { runChild, type ChildCommand, type ProcessControl } from "../../src/infr
 const FAMILY = fileURLToPath(new URL("../fixtures/child/process-family.mjs", import.meta.url));
 const posix = process.platform !== "win32";
 
-/** Documented bounds (see docs/architecture.md): deadline + grace + drain + 250 ms + 500 ms verification. */
+/** Documented bound (see docs/architecture.md): a run returns by timeoutMs + killGraceMs + settleMs. */
 const TIMEOUT_MS = 300;
 const KILL_GRACE_MS = 500;
 const DRAIN_MS = 250;
-const MAX_OVERRUN_MS = KILL_GRACE_MS + DRAIN_MS + 250 + 500;
+const SETTLE_MS = 250;
+const DEADLINE_MS = TIMEOUT_MS + KILL_GRACE_MS + SETTLE_MS;
+/** Documented tolerance for event-loop and process-scheduling latency beyond the deadline. */
+const TOLERANCE_MS = 150;
+const MAX_OVERRUN_MS = DEADLINE_MS - TIMEOUT_MS + TOLERANCE_MS;
 
 /** Every pid a fixture reported; killed after each test so a failure cannot leak processes. */
 const owned: number[] = [];
@@ -39,6 +43,7 @@ const family = (mode: string, overrides: Partial<ChildCommand> = {}): ChildComma
   timeoutMs: TIMEOUT_MS,
   killGraceMs: KILL_GRACE_MS,
   drainMs: DRAIN_MS,
+  settleMs: SETTLE_MS,
   maxOutputBytes: 64 * 1024,
   ...overrides,
 });
@@ -50,9 +55,11 @@ const pidsFrom = (stdout: string): { child: number; grandchild?: number } => {
 };
 
 const run = async (command: ChildCommand, control?: ProcessControl) => {
+  const before = performance.now();
   const outcome = await runChild(command, {}, control);
   if (!outcome.ok) throw new Error(JSON.stringify(outcome.error));
-  return outcome.value;
+  // Measured by the caller, not taken from the outcome's own report.
+  return { ...outcome.value, wallMs: performance.now() - before };
 };
 
 describe.skipIf(!posix)("process lifecycle on POSIX", () => {
@@ -130,6 +137,46 @@ describe.skipIf(!posix)("process lifecycle on POSIX", () => {
     expect(alive(sentinel.pid)).toBe(true);
   });
 
+  it("holds the whole run to its deadline when a grandchild ignores SIGTERM and holds the pipes", async () => {
+    const outcome = await run(family("stubborn"));
+    const pids = pidsFrom(outcome.stdout);
+    expect(outcome.deadlineMs).toBe(DEADLINE_MS);
+    expect(outcome.wallMs).toBeLessThanOrEqual(DEADLINE_MS + TOLERANCE_MS);
+    expect(outcome).toMatchObject({ termination: "timed-out", outputComplete: false, cleanup: { status: "terminated" } });
+    expect(alive(pids.child)).toBe(false);
+    expect(alive(pids.grandchild ?? -1)).toBe(false);
+  });
+
+  it("reports a grandchild that escaped the process group instead of claiming a clean termination", async () => {
+    const outcome = await run(family("escape"));
+    const pids = pidsFrom(outcome.stdout);
+    expect(outcome.wallMs).toBeLessThanOrEqual(DEADLINE_MS + TOLERANCE_MS);
+    expect(outcome.termination).toBe("timed-out");
+    expect(outcome.cleanup.status).toBe("failed");
+    expect(outcome.cleanup.reason).toContain("left the group");
+    expect(alive(pids.child)).toBe(false);
+    // Outside the group Revscope signals nothing, so the escaped process is still running.
+    expect(alive(pids.grandchild ?? -1)).toBe(true);
+  });
+
+  it("shortens the deadline when cancelled and still escalates to SIGKILL", async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+    const outcome = await run(family("ignore-term", { timeoutMs: 20_000, signal: controller.signal }));
+    pidsFrom(outcome.stdout);
+    expect(outcome.termination).toBe("cancelled");
+    expect(outcome.signal).toBe("SIGKILL");
+    expect(outcome.deadlineMs).toBeLessThanOrEqual(100 + KILL_GRACE_MS + SETTLE_MS + TOLERANCE_MS);
+    expect(outcome.wallMs).toBeLessThanOrEqual(outcome.deadlineMs + TOLERANCE_MS);
+  });
+
+  it("rejects NUL characters in the executable or working directory without throwing", async () => {
+    for (const command of [family("quick", { executable: `${process.execPath}\0x` }), family("quick", { cwd: "/tmp\0x" })]) {
+      const outcome = await runChild(command, {});
+      expect(outcome.ok ? "started" : outcome.error.code).toBe("invalid_input");
+    }
+  });
+
   it("reports termination failure and still returns within the bound", async () => {
     const denied: ProcessControl = {
       platform: process.platform,
@@ -146,7 +193,7 @@ describe.skipIf(!posix)("process lifecycle on POSIX", () => {
     expect(outcome.termination).toBe("timed-out");
     expect(outcome.cleanup.status).toBe("failed");
     expect(outcome.cleanup.reason).toContain("EPERM");
-    expect(outcome.durationMs).toBeLessThan(TIMEOUT_MS + MAX_OVERRUN_MS + 200);
+    expect(outcome.wallMs).toBeLessThanOrEqual(DEADLINE_MS + TOLERANCE_MS);
     // The real processes are still running because termination was denied.
     expect(alive(pids.child)).toBe(true);
     process.kill(-pids.child, "SIGKILL");

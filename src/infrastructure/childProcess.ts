@@ -1,5 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { isAbsolute } from "node:path";
+import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { invalidInput, makeError, type ErrorEnvelope, type InputIssue } from "../domain/errors.js";
@@ -16,13 +17,15 @@ export interface ChildCommand {
   readonly args: readonly string[];
   readonly cwd?: string;
   readonly environment?: EnvironmentPolicy;
-  /** Total time allowed before the process tree is terminated. */
+  /** How long the child may run before termination begins. */
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
   /** Time between SIGTERM and SIGKILL when terminating. Default 500 ms. */
   readonly killGraceMs?: number;
-  /** Time to collect remaining output after the child exits. Default 250 ms. */
+  /** After the child exits, time to collect output still arriving from descendants. Default 250 ms. */
   readonly drainMs?: number;
+  /** Time after the kill grace reserved for final cleanup and verification. Default 250 ms. */
+  readonly settleMs?: number;
   readonly signal?: AbortSignal;
 }
 
@@ -37,7 +40,8 @@ export interface ChildCleanup {
   /**
    * - not-needed: the process tree ended by itself;
    * - terminated: Revscope signalled the tree and it is gone;
-   * - failed: signalling failed or the tree survived termination.
+   * - failed: signalling failed, the tree survived until the deadline, or a
+   *   descendant outside the tracked scope still holds the output pipes.
    */
   readonly status: "not-needed" | "terminated" | "failed";
   readonly scope: TerminationScope;
@@ -45,10 +49,11 @@ export interface ChildCleanup {
 }
 
 export interface ChildOutcome {
-  /** Why the run ended: normal exit, the deadline, or the caller's cancellation. */
+  /** Why the run ended: normal exit, the timeout, or the caller's cancellation. */
   readonly termination: "exited" | "timed-out" | "cancelled";
   readonly exitCode: number | null;
   readonly signal: string | null;
+  /** Whether everything the run started is gone; `failed` is a termination failure. */
   readonly cleanup: ChildCleanup;
   readonly stdout: string;
   readonly stderr: string;
@@ -56,6 +61,12 @@ export interface ChildOutcome {
   /** False when output streams were cut off because a descendant held them open. */
   readonly outputComplete: boolean;
   readonly durationMs: number;
+  /**
+   * The hard bound this run was held to, in milliseconds from its start:
+   * timeoutMs + killGraceMs + settleMs, or less after cancellation. The run
+   * returns by then, plus event-loop latency, whatever its descendants do.
+   */
+  readonly deadlineMs: number;
   readonly environment: EnvironmentManifest;
 }
 
@@ -72,8 +83,10 @@ const defaultControl: ProcessControl = {
   },
 };
 
-/** How long to wait for killed processes to disappear before declaring cleanup failed. */
-const VERIFY_EXIT_MS = 500;
+/** Poll interval while waiting for the tree to disappear and the pipes to close. */
+const SETTLE_POLL_MS = 10;
+/** After the group is gone, how long to wait for the kernel to close its pipes. */
+const PIPE_CLOSE_GRACE_MS = 100;
 
 const errorCode = (cause: unknown): string =>
   typeof cause === "object" && cause !== null && "code" in cause ? String(cause.code) : "";
@@ -82,6 +95,10 @@ const validate = (command: ChildCommand): InputIssue[] => {
   const issues: InputIssue[] = [];
   if (!isAbsolute(command.executable))
     issues.push({ path: "executable", message: "Must be an absolute path; PATH lookup is not used" });
+  if (command.executable.includes("\0"))
+    issues.push({ path: "executable", message: "Cannot contain NUL characters" });
+  if (command.cwd?.includes("\0") === true)
+    issues.push({ path: "cwd", message: "Cannot contain NUL characters" });
   command.args.forEach((arg, index) => {
     if (arg.includes("\0"))
       issues.push({ path: `args.${String(index)}`, message: "Arguments cannot contain NUL characters" });
@@ -91,21 +108,37 @@ const validate = (command: ChildCommand): InputIssue[] => {
     ["maxOutputBytes", command.maxOutputBytes],
     ["killGraceMs", command.killGraceMs ?? 500],
     ["drainMs", command.drainMs ?? 250],
+    ["settleMs", command.settleMs ?? 250],
   ] as const)
-    if (!Number.isInteger(value) || value <= 0)
+    if (!Number.isSafeInteger(value) || value <= 0)
       issues.push({ path: field, message: "Must be a positive integer" });
   return issues;
 };
 
+const spawnError = (cause: unknown): ErrorEnvelope => {
+  const code = errorCode(cause);
+  if (code === "ENOENT") return makeError("target_not_found", "The executable does not exist", {});
+  if (code === "EACCES") return makeError("access_denied", "The executable cannot be run by the current user", {});
+  return makeError("provider_failure", "The child process could not be started", {});
+};
+
 /**
- * Run one executable without a shell, with an allowlisted environment, a
- * deadline that holds even when descendants keep output pipes open, explicit
- * cancellation, and bounded output capture.
+ * Run one executable without a shell, with an allowlisted environment,
+ * explicit cancellation, bounded output capture, and one hard deadline.
  *
- * On POSIX the child leads a new process group; termination signals that
- * group (SIGTERM, then SIGKILL), and any member left when the child finishes
- * is terminated too. Only processes in that group are signalled. On Windows
- * only the direct child is signalled and descendants are not tracked.
+ * Phases, all capped by the deadline (timeoutMs + killGraceMs + settleMs):
+ * 1. The child runs for up to timeoutMs, or until the caller aborts.
+ * 2. Termination: SIGTERM to the tree, then SIGKILL after killGraceMs.
+ * 3. After the child exits, output from descendants is collected for up to
+ *    drainMs; pipes held open longer cannot extend the run.
+ * 4. Settling: anything left in the tree is killed, and the run waits for the
+ *    tree to disappear and the pipes to close.
+ *
+ * On POSIX the child leads a new process group, and only that group is ever
+ * signalled; once the group is observed gone it is never signalled again. A
+ * descendant that leaves the group is not signalled, but if it still holds
+ * the output pipes the cleanup is reported as failed. On Windows only the
+ * direct child is signalled and descendants are not tracked.
  */
 export const runChild = async (
   command: ChildCommand,
@@ -121,25 +154,15 @@ export const runChild = async (
 
   const killGraceMs = command.killGraceMs ?? 500;
   const drainMs = command.drainMs ?? 250;
+  const settleMs = command.settleMs ?? 250;
   const usesGroup = control.platform !== "win32";
   const scope: TerminationScope = usesGroup ? "process-group" : "direct-child-only";
   const started = performance.now();
+  let deadlineAt = started + command.timeoutMs + killGraceMs + settleMs;
 
-  return new Promise((resolve) => {
-    const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
-    let captured = 0;
-    let truncated = false;
-    let termination: ChildOutcome["termination"] = "exited";
-    let signalled = false;
-    let cleanupFailure: string | null = null;
-    let exit: { code: number | null; signal: string | null } | null = null;
-    let finished = false;
-    const timers: NodeJS.Timeout[] = [];
-    const later = (ms: number, task: () => void) => {
-      timers.push(setTimeout(task, ms));
-    };
-
-    const child = spawn(command.executable, [...command.args], {
+  let child: ChildProcessByStdio<null, Readable, Readable>;
+  try {
+    child = spawn(command.executable, [...command.args], {
       shell: false,
       env: { ...environment.value.env },
       stdio: ["ignore", "pipe", "pipe"],
@@ -147,88 +170,164 @@ export const runChild = async (
       detached: usesGroup,
       ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
     });
-    const pid = child.pid;
+  } catch (cause: unknown) {
+    return err(spawnError(cause));
+  }
+  const pid = child.pid;
 
-    /** Signal the whole group (POSIX) or the child (Windows). Returns false if it is already gone. */
-    const signalTree = (signal: NodeJS.Signals): boolean => {
-      if (pid === undefined) return false;
+  return new Promise((resolve) => {
+    const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
+    let captured = 0;
+    let truncated = false;
+    let termination: ChildOutcome["termination"] = "exited";
+    let exit: { code: number | null; signal: string | null } | null = null;
+    let closed = false;
+    let outputComplete = false;
+    let signalled = false;
+    let groupGone = false;
+    let cleanupFailure: string | null = null;
+    let settling = false;
+    let resolved = false;
+    const timers = new Set<NodeJS.Timeout>();
+    let deadlineTimer: NodeJS.Timeout | undefined;
+
+    /** Run a task at an absolute time; every timer is cleared when settling starts. */
+    const at = (time: number, task: () => void): NodeJS.Timeout => {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        task();
+      }, Math.max(0, time - performance.now()));
+      timers.add(timer);
+      return timer;
+    };
+    const clearTimers = () => {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    };
+
+    /** Signal the group (POSIX) or the child (Windows), never a group already observed gone. */
+    const signalTree = (signal: NodeJS.Signals): void => {
+      if (pid === undefined || groupGone) return;
       try {
         if (usesGroup) control.kill(-pid, signal);
         else child.kill(signal);
-        return true;
+        signalled = true;
       } catch (cause: unknown) {
-        if (errorCode(cause) === "ESRCH") return false;
-        cleanupFailure = `Signalling the process ${usesGroup ? "group" : ""} failed (${errorCode(cause) || "unknown error"}).`;
-        return true;
+        if (errorCode(cause) === "ESRCH") {
+          groupGone = true;
+          return;
+        }
+        cleanupFailure ??= `Sending ${signal} to the process ${usesGroup ? "group" : "child"} failed (${errorCode(cause) || "unknown error"}).`;
       }
     };
     const treeAlive = (): boolean => {
       if (pid === undefined) return false;
       if (!usesGroup) return exit === null;
+      if (groupGone) return false;
       try {
         control.kill(-pid, 0);
         return true;
       } catch (cause: unknown) {
-        return errorCode(cause) !== "ESRCH";
+        if (errorCode(cause) !== "ESRCH") return true;
+        groupGone = true;
+        return false;
       }
+    };
+
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      clearTimers();
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      child.stdout.destroy();
+      child.stderr.destroy();
+      const survived = treeAlive();
+      const heldOpen = pid !== undefined && !closed && !survived;
+      const failure =
+        cleanupFailure ??
+        (survived
+          ? "Processes in the group were still running at the deadline."
+          : heldOpen
+            ? usesGroup
+              ? "The process group ended, but its output pipes were still held open: a descendant that left the group is still running. It was not signalled."
+              : "The child exited, but its output pipes were still held open by descendants, which are not tracked on this platform."
+            : null);
+      resolve(
+        ok({
+          termination,
+          exitCode: exit?.code ?? null,
+          signal: exit?.signal ?? null,
+          cleanup: {
+            status: failure !== null ? "failed" : signalled ? "terminated" : "not-needed",
+            scope,
+            reason: failure,
+          },
+          stdout: Buffer.concat(chunks.stdout).toString("utf8"),
+          stderr: Buffer.concat(chunks.stderr).toString("utf8"),
+          outputTruncated: truncated,
+          outputComplete,
+          durationMs: Math.round(performance.now() - started),
+          deadlineMs: Math.round(deadlineAt - started),
+          environment: environment.value.manifest,
+        }),
+      );
+    };
+
+    /** Kill whatever is left, then wait for the tree and its pipes to go, never past the deadline. */
+    const settle = async (): Promise<void> => {
+      let goneAt: number | null = null;
+      // At least one pass, even when settling starts at the deadline itself.
+      // The deadline timer may resolve the run while this loop waits.
+      for (;;) {
+        if (resolved) return;
+        // Re-signal on every pass: a member forked during the previous SIGKILL is caught too.
+        if (treeAlive()) signalTree("SIGKILL");
+        else {
+          goneAt ??= performance.now();
+          if (closed || performance.now() - goneAt >= PIPE_CLOSE_GRACE_MS) return;
+        }
+        if (performance.now() >= deadlineAt) return;
+        await delay(SETTLE_POLL_MS);
+      }
+    };
+
+    const beginSettle = () => {
+      if (settling) return;
+      settling = true;
+      clearTimers();
+      command.signal?.removeEventListener("abort", onAbort);
+      void settle().then(finish, finish);
     };
 
     const terminate = (reason: "timed-out" | "cancelled") => {
-      if (finished || signalled) return;
-      if (exit === null) termination = reason;
-      signalled = true;
-      if (!signalTree("SIGTERM")) return;
-      later(killGraceMs, () => {
-        if (treeAlive()) signalTree("SIGKILL");
-      });
-    };
-
-    /** Signalled processes can linger briefly as zombies; poll until they are gone. */
-    const settleTree = async (): Promise<boolean> => {
-      // Nothing from this run may outlive it, including descendants that
-      // closed their output and kept running.
-      if (treeAlive()) {
-        signalled = true;
-        signalTree("SIGKILL");
+      if (settling) return;
+      if (exit !== null) {
+        // The child already exited; only lingering descendants remain.
+        beginSettle();
+        return;
       }
-      if (!usesGroup) return false;
-      const until = performance.now() + VERIFY_EXIT_MS;
-      while (treeAlive() && performance.now() < until) await delay(10);
-      return treeAlive();
-    };
-
-    const finish = (outputComplete: boolean) => {
-      if (finished) return;
-      finished = true;
-      for (const timer of timers) clearTimeout(timer);
-      command.signal?.removeEventListener("abort", onAbort);
-      child.stdout.destroy();
-      child.stderr.destroy();
-      void settleTree().then((survived) => {
-        const status: ChildCleanup["status"] =
-          cleanupFailure !== null || survived ? "failed" : signalled ? "terminated" : "not-needed";
-        resolve(
-          ok({
-            termination,
-            exitCode: exit?.code ?? null,
-            signal: exit?.signal ?? null,
-            cleanup: {
-              status,
-              scope,
-              reason: cleanupFailure ?? (survived ? "Processes in the group survived SIGKILL." : null),
-            },
-            stdout: Buffer.concat(chunks.stdout).toString("utf8"),
-            stderr: Buffer.concat(chunks.stderr).toString("utf8"),
-            outputTruncated: truncated,
-            outputComplete,
-            durationMs: Math.round(performance.now() - started),
-            environment: environment.value.manifest,
-          }),
-        );
+      if (termination !== "exited") return;
+      termination = reason;
+      signalTree("SIGTERM");
+      at(performance.now() + killGraceMs, () => {
+        if (!settling && treeAlive()) signalTree("SIGKILL");
       });
     };
 
-    const onAbort = () => terminate("cancelled");
+    const armDeadline = () => {
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      deadlineTimer = setTimeout(() => {
+        beginSettle();
+        // The settle loop stops at the deadline; this resolves even if it cannot run.
+        finish();
+      }, Math.max(0, deadlineAt - performance.now()));
+    };
+
+    const onAbort = () => {
+      deadlineAt = Math.min(deadlineAt, performance.now() + killGraceMs + settleMs);
+      armDeadline();
+      terminate("cancelled");
+    };
     command.signal?.addEventListener("abort", onAbort, { once: true });
 
     const capture = (stream: "stdout" | "stderr") => (chunk: Buffer) => {
@@ -246,30 +345,32 @@ export const runChild = async (
     child.stderr.on("data", capture("stderr"));
 
     child.once("error", (cause: NodeJS.ErrnoException) => {
-      if (finished) return;
-      finished = true;
-      for (const timer of timers) clearTimeout(timer);
+      if (pid !== undefined) {
+        // The process exists; this is a signalling failure, not a start failure.
+        cleanupFailure ??= `The child process reported an error (${cause.code ?? "unknown error"}).`;
+        return;
+      }
+      if (resolved) return;
+      resolved = true;
+      clearTimers();
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
       command.signal?.removeEventListener("abort", onAbort);
-      resolve(
-        err(
-          cause.code === "ENOENT"
-            ? makeError("target_not_found", "The executable does not exist", {})
-            : cause.code === "EACCES"
-              ? makeError("access_denied", "The executable cannot be run by the current user", {})
-              : makeError("provider_failure", "The child process could not be started", {}),
-        ),
-      );
+      resolve(err(spawnError(cause)));
     });
     child.once("exit", (code, signal) => {
       exit = { code, signal };
-      // Descendants may keep the pipes open; collect output briefly, then stop waiting.
-      later(drainMs, () => finish(false));
+      if (settling) return;
+      // Descendants may keep the pipes open; collect their output briefly, then stop waiting.
+      at(Math.min(performance.now() + drainMs, deadlineAt), beginSettle);
     });
-    child.once("close", () => finish(true));
+    child.once("close", () => {
+      closed = true;
+      if (settling) return;
+      outputComplete = true;
+      beginSettle();
+    });
 
-    later(command.timeoutMs, () => terminate("timed-out"));
-    // Absolute bound: even an unkillable tree cannot hold the caller past this
-    // point plus VERIFY_EXIT_MS for the final check.
-    later(command.timeoutMs + killGraceMs + drainMs + 250, () => finish(false));
+    at(started + command.timeoutMs, () => terminate("timed-out"));
+    armDeadline();
   });
 };
