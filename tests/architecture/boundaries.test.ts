@@ -57,7 +57,8 @@ const EXTERNAL: Readonly<Record<string, RegExp>> = {
   application: /^(?:zod|node:path|node:async_hooks)$/u,
   infrastructure: /^(?:zod|node:.+)$/u,
   interfaces: /^(?:zod|node:.+)$/u,
-  "composition.ts": /^(?:zod|node:crypto)$/u,
+  // node:os and node:path locate the opt-in diagnostics directory.
+  "composition.ts": /^(?:zod|node:crypto|node:os|node:path)$/u,
   bin: /^$/u,
 };
 

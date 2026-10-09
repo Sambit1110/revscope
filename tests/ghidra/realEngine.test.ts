@@ -34,7 +34,12 @@ const settings = () => {
   return { ghidraDir, ...(javaHome === undefined || javaHome === "" ? {} : { javaHome }) };
 };
 
-const context = () => createToolContext({ logLevel: "silent", writeLog: () => undefined, ghidra: settings() });
+/** REVSCOPE_GHIDRA_DIAGNOSTICS=1 keeps failed runs for diagnosis, reported on this terminal only. */
+const diagnostics =
+  process.env["REVSCOPE_GHIDRA_DIAGNOSTICS"] === "1" ? { report: (line: string) => void process.stderr.write(line) } : null;
+
+const context = () =>
+  createToolContext({ logLevel: "silent", writeLog: () => undefined, ghidra: settings(), ghidraDiagnostics: diagnostics });
 
 const fixture = async () => {
   const path = join(await tempDir(), "fixture.elf");

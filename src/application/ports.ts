@@ -142,7 +142,8 @@ export interface BinaryAnalysisRequest {
 /** What is left of a run's processes and files after it returned. Fixed texts only, never paths. */
 export interface EngineCleanup {
   readonly process: "not-started" | "not-needed" | "terminated" | "failed";
-  readonly workspace: "not-created" | "removed" | "failed";
+  /** "preserved" only when local diagnostics are explicitly enabled. */
+  readonly workspace: "not-created" | "removed" | "failed" | "preserved";
   readonly reason: string | null;
 }
 

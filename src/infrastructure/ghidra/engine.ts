@@ -14,6 +14,7 @@ import { sha256Hex } from "../../domain/json.js";
 import { err, ok, type Result } from "../../domain/result.js";
 import { runChild, type ChildOutcome, type ProcessControl } from "../childProcess.js";
 import { openRegularFile, readChunks } from "../safeFile.js";
+import { emptyTrace, preserveFailedRun, type DiagnosticsOptions, type RunTrace } from "./diagnostics.js";
 import { EXPORT_LIMITS, parseGhidraExport } from "./exportFormat.js";
 import { GhidraExportProvider, exportCoverage } from "./exportProvider.js";
 import {
@@ -49,6 +50,8 @@ export interface GhidraEngineOptions {
   /** Host environment the child's allowlist draws from; defaults to process.env. */
   readonly host?: Readonly<Record<string, string | undefined>>;
   readonly control?: ProcessControl;
+  /** Opt-in: keep failed runs' workspaces and logs for local diagnosis. Off by default. */
+  readonly diagnostics?: DiagnosticsOptions;
 }
 
 type Outcome = Result<
@@ -143,17 +146,33 @@ export class GhidraEngine implements BinaryAnalysisEngine {
       return err(withCleanup(workspace.error, notStarted));
     }
 
-    let childCleanup: ChildOutcome["cleanup"] | null = null;
-    const outcome = await this.#run(request, installation.value, scriptDir, workspace.value, source.value, deadlineAt, (child) => {
-      childCleanup = child.cleanup;
-    }).catch((): Outcome => err(makeError("provider_failure", "The engine run failed unexpectedly", { engine: "ghidra", reason: "engine_failed" })));
+    const trace = emptyTrace();
+    const outcome = await this.#run(request, installation.value, scriptDir, workspace.value, source.value, deadlineAt, trace).catch(
+      (): Outcome => err(makeError("provider_failure", "The engine run failed unexpectedly", { engine: "ghidra", reason: "engine_failed" })),
+    );
     // runChild has returned, so the process tree has been settled before the workspace goes.
-    const removed = await removeWorkspace(workspace.value);
-    const settled = childCleanup as ChildOutcome["cleanup"] | null;
+    const failed = !outcome.ok || !outcome.value.coverage.exportComplete;
+    const preserved =
+      failed && this.#options.diagnostics !== undefined
+        ? await preserveFailedRun(
+            workspace.value,
+            {
+              ghidraVersion: installation.value.version,
+              outcome: outcome.ok
+                ? { code: "analysis_incomplete", details: { coverage: { ...outcome.value.coverage } } }
+                : { code: outcome.error.code, details: outcome.error.details },
+              trace,
+            },
+            this.#options.diagnostics,
+          )
+        : "failed";
+    const removed = preserved === "preserved" ? "preserved" : await removeWorkspace(workspace.value);
+    const settled = trace.child?.cleanup ?? null;
     // Both failures are reported when both happen; neither hides the other.
     const reasons = [
       settled?.reason ?? null,
       removed === "failed" ? "The temporary analysis workspace could not be removed completely." : null,
+      removed === "preserved" ? "The workspace was preserved for local diagnostics (REVSCOPE_GHIDRA_DIAGNOSTICS)." : null,
     ].filter((reason): reason is string => reason !== null);
     const cleanup: EngineCleanup = {
       process: settled?.status ?? "not-started",
@@ -171,7 +190,7 @@ export class GhidraEngine implements BinaryAnalysisEngine {
     workspace: Workspace,
     source: Parameters<typeof copyInput>[0],
     deadlineAt: number,
-    observeChild: (child: ChildOutcome) => void,
+    trace: RunTrace,
   ): Promise<Outcome> {
     const { limits } = request;
     const artifact = await copyInput(source, request.path, workspace, this.#options.maxInputBytes ?? MAX_INPUT_BYTES);
@@ -193,6 +212,7 @@ export class GhidraEngine implements BinaryAnalysisEngine {
         }),
       );
 
+    trace.args = plan.args;
     const launched = await runChild(
       {
         executable: installation.analyzeHeadless,
@@ -217,7 +237,7 @@ export class GhidraEngine implements BinaryAnalysisEngine {
       return err(makeError("provider_failure", "The engine could not be started", { engine: "ghidra", reason: "engine_not_started" }));
     }
     const child = launched.value;
-    observeChild(child);
+    trace.child = child;
     if (child.termination === "cancelled") return err(cancelled());
 
     const exported = await readBounded(workspace.exportPath, EXPORT_LIMITS.totalBytes);
@@ -239,7 +259,8 @@ export class GhidraEngine implements BinaryAnalysisEngine {
         coverage: exportCoverage(parsed.value, child.termination === "timed-out" ? "timed-out" : "engine-exited"),
       });
     }
-    if (!parsed.ok && parsed.error.kind !== "empty")
+    if (!parsed.ok && parsed.error.kind !== "empty") {
+      trace.exportProblem = parsed.error.kind === "malformed" ? `line ${String(parsed.error.line)}: ${parsed.error.reason}` : parsed.error.kind;
       return err(
         makeError("provider_failure", "The engine's export is malformed", {
           engine: "ghidra",
@@ -247,10 +268,12 @@ export class GhidraEngine implements BinaryAnalysisEngine {
           ...(parsed.error.kind === "malformed" ? { line: parsed.error.line, problem: parsed.error.reason } : {}),
         }),
       );
+    }
     // No usable export at all.
     if (child.termination === "timed-out")
       return err(makeError("analysis_timeout", "The engine produced no result before the deadline", { timeout_ms: limits.timeoutMs }));
-    switch (classifyHeadlessOutput(await logText(workspace, child))) {
+    trace.classification = classifyHeadlessOutput(await logText(workspace, child));
+    switch (trace.classification) {
       case "unsupported_format":
         return err(makeError("unsupported_target", "Ghidra could not recognize the file as a supported program", { path: request.path }));
       case "java_runtime":

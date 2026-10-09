@@ -29,6 +29,7 @@ export const main = async (io: ProcessIo): Promise<number> => {
     logLevel: config.value.logLevel,
     writeLog: io.stderr,
     ghidra: config.value.ghidra,
+    ghidraDiagnostics: config.value.ghidraDiagnostics ? { report: io.stderr } : null,
   });
   try {
     if (io.argv[0] === "mcp") {

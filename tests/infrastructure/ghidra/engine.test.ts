@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -325,6 +325,47 @@ describe.skipIf(!posix)("Ghidra engine with a fake analyzeHeadless", () => {
       const error = failure(result);
       expect(error.details["cleanup"]).toMatchObject({ process: "failed", reason: expect.stringContaining("EPERM") });
       expect(alive(run?.pid)).toBe(true);
+    });
+  });
+
+  describe("opt-in diagnostics", () => {
+    it("are off by default: a failed run's workspace is removed and nothing is reported", async () => {
+      const { result, workspaces } = await analyze({ mode: "say", stdout: "Failed to compile script\n", exitCode: 0 });
+      expect(failure(result).details["cleanup"]).toMatchObject({ workspace: "removed" });
+      expect(await workspaces()).toEqual([]);
+    });
+
+    it("keep a failed run's workspace, logs and run record, and report the location only locally", async () => {
+      const directory = join(await tempDir(), "diagnostics");
+      const reported: string[] = [];
+      const { result, run } = await analyze(
+        { mode: "say", stdout: "INFO  REPORT: Failed to compile script RevscopeExport.java\n", stderr: "detail on stderr\n", exitCode: 3 },
+        { engine: { diagnostics: { directory, report: (line) => reported.push(line) } } },
+      );
+      const error = failure(result);
+      expect(error).toMatchObject({ code: "provider_failure", details: { reason: "export_script_failed", cleanup: { workspace: "preserved" } } });
+      // Nothing about the location, the logs or the output reaches the caller.
+      const text = JSON.stringify(error);
+      for (const hidden of [directory, "Failed to compile", "detail on stderr", run?.cwd ?? "-"]) expect(text).not.toContain(hidden);
+      expect(reported).toHaveLength(1);
+      const [preserved] = (await readdir(directory)).map((name) => join(directory, name));
+      expect(reported[0]).toContain(preserved);
+      const record = JSON.parse(await readFile(join(preserved ?? "", "run.json"), "utf8")) as Record<string, unknown>;
+      expect(record).toMatchObject({
+        outcome: { code: "provider_failure" },
+        internal: { classification: "export_script_failed" },
+        process: { termination: "exited", exit_code: 3 },
+      });
+      expect(JSON.stringify(record)).not.toContain("PATH=");
+      expect(await readFile(join(preserved ?? "", "stdout.txt"), "utf8")).toContain("Failed to compile");
+      expect(await readdir(join(preserved ?? "", "workspace"))).toEqual(expect.arrayContaining(["input", "logs", "home", "out"]));
+    });
+
+    it("leave successful runs alone", async () => {
+      const directory = join(await tempDir(), "diagnostics");
+      const { result } = await analyze({ mode: "success", export: exportText() }, { engine: { diagnostics: { directory, report: () => undefined } } });
+      expect(value(result).cleanup).toMatchObject({ workspace: "removed" });
+      expect(await readdir(directory).catch(() => [])).toEqual([]);
     });
   });
 });
