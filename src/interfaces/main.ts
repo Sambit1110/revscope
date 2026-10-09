@@ -23,7 +23,11 @@ export const main = async (io: ProcessIo): Promise<number> => {
     io.stdout(renderJson({ ok: false, error: config.error }));
     return EXIT_CODES.invalid_input;
   }
-  const context = createToolContext({ logLevel: config.value.logLevel, writeLog: io.stderr });
+  const context = createToolContext({
+    logLevel: config.value.logLevel,
+    writeLog: io.stderr,
+    ghidra: config.value.ghidra,
+  });
   try {
     if (io.argv[0] === "mcp") {
       if (io.argv.length > 1) {
