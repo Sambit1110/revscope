@@ -100,6 +100,14 @@ describe("Revscope's Ghidra export script", () => {
     expect(await script()).toMatch(/private String header\([^)]*\)\s*throws Exception \{/u);
   });
 
+  it("reads language and compiler ids with the accessor Ghidra 12.1.4 provides (getIdAsString)", async () => {
+    // Regression: LanguageID has no getIdString() in Ghidra 12.1.4; the script failed to compile.
+    const text = await script();
+    expect(text).toContain("getLanguageID().getIdAsString()");
+    expect(text).toContain("getCompilerSpecID().getIdAsString()");
+    expect(text).not.toContain("getIdString(");
+  });
+
   it("starts no processes and touches no files except the export", async () => {
     const text = await script();
     for (const forbidden of ["Runtime.getRuntime", "ProcessBuilder", "exec(", "Files.delete", "java.net", "runScript(", "Emulator"])

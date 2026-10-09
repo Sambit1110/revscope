@@ -165,7 +165,7 @@ public class RevscopeExport extends HeadlessScript {
 			",\"ghidra_version\":" + json(Application.getApplicationVersion()) +
 			",\"program\":{" +
 			"\"executable_format\":" + json(label(format == null ? "unknown" : format)) +
-			",\"language_id\":" + json(label(program.getLanguageID().getIdString())) +
+			",\"language_id\":" + json(label(program.getLanguageID().getIdAsString())) +
 			",\"compiler_spec\":" +
 			json(label(program.getCompilerSpec().getCompilerSpecID().getIdAsString())) +
 			",\"processor\":" + json(label(program.getLanguage().getProcessor().toString())) +

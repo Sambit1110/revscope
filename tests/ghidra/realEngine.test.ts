@@ -18,7 +18,7 @@ import { executeTool } from "../../src/application/tools/registry.js";
 import type { ToolOutput } from "../../src/application/tools/types.js";
 import { createToolContext } from "../../src/composition.js";
 import type { Evidence } from "../../src/domain/evidence.js";
-import { GhidraEngine } from "../../src/infrastructure/ghidra/engine.js";
+import { DEFAULT_SCRIPT_DIR, GhidraEngine } from "../../src/infrastructure/ghidra/engine.js";
 import { serveMcp } from "../../src/interfaces/mcp.js";
 import { makeElf } from "../fixtures/binaries/make-elf.mjs";
 import { BIN, REPO_ROOT, tempDir } from "../support/context.js";
@@ -57,9 +57,38 @@ const success = (output: ToolOutput) => {
 
 const byOperation = (records: readonly Evidence[], name: string) => records.filter(({ operation }) => operation.name === name);
 
+/** All of the installation's jars, the classpath Ghidra compiles scripts against. */
+const ghidraJars = async (root: string): Promise<string[]> => {
+  const jars: string[] = [];
+  const walk = async (path: string): Promise<void> => {
+    for (const entry of await readdir(path, { withFileTypes: true })) {
+      const child = join(path, entry.name);
+      if (entry.isDirectory()) await walk(child);
+      else if (entry.name.endsWith(".jar") && path.endsWith(`${"/"}lib`)) jars.push(child);
+    }
+  };
+  await walk(join(root, "Ghidra"));
+  return jars;
+};
+
 // Every test calls settings() itself, so a missing Ghidra fails each test
 // instead of being reported as skipped.
 describe("Ghidra real-engine verification", () => {
+  it("compiles Revscope's export script against the installed Ghidra's own classes", async () => {
+    // Regression: the script called LanguageID.getIdString(), which does not exist in
+    // Ghidra 12.1.4, so Ghidra skipped it and every analysis failed with export_script_failed.
+    const { ghidraDir: root, javaHome: jdk } = settings();
+    const javac = jdk === undefined ? "javac" : join(jdk, "bin", "javac");
+    const out = await tempDir();
+    const compiled = spawnSync(
+      javac,
+      ["-proc:none", "-nowarn", "-d", out, "-cp", (await ghidraJars(root)).join(":"), join(DEFAULT_SCRIPT_DIR, "RevscopeExport.java")],
+      { encoding: "utf8", timeout: 120_000 },
+    );
+    expect(compiled.stderr).toBe("");
+    expect(compiled.status).toBe(0);
+  });
+
   it("analyzes the ELF fixture: metadata, named functions, and pseudocode, labelled as engine output", async () => {
     settings();
     const output = success(await analyze(await fixture()));
