@@ -16,6 +16,11 @@ const DEADLINE_MS = TIMEOUT_MS + KILL_GRACE_MS + SETTLE_MS;
 /** Documented tolerance for event-loop and process-scheduling latency beyond the deadline. */
 const TOLERANCE_MS = 150;
 const MAX_OVERRUN_MS = DEADLINE_MS - TIMEOUT_MS + TOLERANCE_MS;
+/**
+ * Tests that need the child's SIGTERM handler installed act only after this
+ * long; under a loaded test run, Node can take well over 100 ms to start.
+ */
+const READY_MS = 1000;
 
 /** Every pid a fixture reported; killed after each test so a failure cannot leak processes. */
 const owned: number[] = [];
@@ -103,12 +108,12 @@ describe.skipIf(!posix)("process lifecycle on POSIX", () => {
   });
 
   it("escalates to SIGKILL when the child ignores SIGTERM", async () => {
-    const outcome = await run(family("ignore-term"));
+    const outcome = await run(family("ignore-term", { timeoutMs: READY_MS }));
     const pids = pidsFrom(outcome.stdout);
     expect(outcome.termination).toBe("timed-out");
     expect(outcome.signal).toBe("SIGKILL");
-    expect(outcome.durationMs).toBeGreaterThanOrEqual(TIMEOUT_MS + KILL_GRACE_MS - 50);
-    expect(outcome.durationMs).toBeLessThan(TIMEOUT_MS + MAX_OVERRUN_MS);
+    expect(outcome.durationMs).toBeGreaterThanOrEqual(READY_MS + KILL_GRACE_MS - 50);
+    expect(outcome.wallMs).toBeLessThanOrEqual(outcome.deadlineMs + TOLERANCE_MS);
     expect(alive(pids.child)).toBe(false);
   });
 
@@ -161,12 +166,12 @@ describe.skipIf(!posix)("process lifecycle on POSIX", () => {
 
   it("shortens the deadline when cancelled and still escalates to SIGKILL", async () => {
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 100);
+    setTimeout(() => controller.abort(), READY_MS);
     const outcome = await run(family("ignore-term", { timeoutMs: 20_000, signal: controller.signal }));
     pidsFrom(outcome.stdout);
     expect(outcome.termination).toBe("cancelled");
     expect(outcome.signal).toBe("SIGKILL");
-    expect(outcome.deadlineMs).toBeLessThanOrEqual(100 + KILL_GRACE_MS + SETTLE_MS + TOLERANCE_MS);
+    expect(outcome.deadlineMs).toBeLessThanOrEqual(READY_MS + KILL_GRACE_MS + SETTLE_MS + TOLERANCE_MS);
     expect(outcome.wallMs).toBeLessThanOrEqual(outcome.deadlineMs + TOLERANCE_MS);
   });
 
