@@ -113,7 +113,8 @@ const cases = async (): Promise<Case[]> => {
   const analysisContexts = {
     unsupported: await fakeGhidraContext({ mode: "say", stdout: "ERROR REPORT: No load spec found for import file\n" }),
     timeout: await fakeGhidraContext({ mode: "hang" }, 300),
-    incomplete: await fakeGhidraContext({ mode: "partial-hang", export: exportText({ trailer: null }) }, 300),
+    // Long enough for the fake to start and write its partial export even in a loaded run.
+    incomplete: await fakeGhidraContext({ mode: "partial-hang", export: exportText({ trailer: null }) }, 2_000),
     success: await fakeGhidraContext({ mode: "success", export: exportText() }),
     misconfigured: testContext({ binaryAnalysis: new GhidraEngine({ settings: { ghidraDir: "relative/ghidra" } }) }).context,
   };

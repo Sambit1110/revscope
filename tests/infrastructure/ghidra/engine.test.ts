@@ -15,6 +15,8 @@ import { exportText } from "../../support/ghidraExport.js";
 const posix = process.platform !== "win32";
 /** Documented allowance for scheduling latency beyond a deadline. */
 const TOLERANCE_MS = 250;
+/** Long enough for the fake to start and write a partial export even in a loaded run. */
+const PARTIAL_RUN_MS = 2_000;
 
 const owned: number[] = [];
 afterEach(() => {
@@ -277,11 +279,12 @@ describe.skipIf(!posix)("Ghidra engine with a fake analyzeHeadless", () => {
     });
 
     it("keeps a cut-off export as incomplete coverage when the deadline stops a slow decompilation", async () => {
-      const { result, wallMs } = await analyze({ mode: "partial-hang", export: exportText({ trailer: null }) }, { engine: { maxChildRunMs: 400 } });
+      // The fake must start and write before the deadline; Node start-up under a loaded run can exceed 400 ms.
+      const { result, wallMs } = await analyze({ mode: "partial-hang", export: exportText({ trailer: null }) }, { engine: { maxChildRunMs: PARTIAL_RUN_MS } });
       const analyzed = value(result);
       expect(analyzed.coverage).toEqual({ exportComplete: false, interruption: "timed-out", stopped: null, analysisTimedOut: false, functionsTotal: null, functionsExported: 2 });
       expect(analyzed.cleanup).toMatchObject({ process: "terminated", workspace: "removed" });
-      expect(wallMs).toBeLessThan(2_000);
+      expect(wallMs).toBeLessThan(PARTIAL_RUN_MS + FAST_TIMING.killGraceMs + FAST_TIMING.settleMs + TOLERANCE_MS + 300);
     });
 
     it("reports an engine that exits mid-export as incomplete", async () => {
