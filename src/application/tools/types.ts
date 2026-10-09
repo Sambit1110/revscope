@@ -88,11 +88,16 @@ export const defineTool = <Input>(spec: {
   },
 });
 
-/** Local paths must be absolute at the tool boundary; adapters resolve relative paths first. */
+/**
+ * Local paths must be absolute at the tool boundary; adapters resolve relative
+ * paths first but pass empty values through, so every interface reports them
+ * identically.
+ */
 export const absolutePathSchema = z
   .string()
-  .min(1)
-  .refine(isAbsolute, "Must be an absolute path");
+  .min(1, "Must not be empty")
+  .refine((path) => !path.includes("\0"), "Must not contain NUL characters")
+  .refine((path) => path === "" || isAbsolute(path), "Must be an absolute path");
 
 /** Round-trip structured values into plain JSON for output payloads. */
 export const toJson = (value: unknown): JsonValue =>

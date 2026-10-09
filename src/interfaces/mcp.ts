@@ -1,4 +1,3 @@
-import { createInterface } from "node:readline";
 import { z } from "zod";
 
 import { PRODUCT_VERSION } from "../application/tools/builtinCapabilities.js";
@@ -25,6 +24,20 @@ const JSONRPC = {
 
 type Id = string | number | null;
 
+/** Longest accepted JSON-RPC line. Tool arguments are paths and small step lists. */
+export const MAX_MCP_LINE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The request's id when it is a valid JSON-RPC id, so even a rejected request
+ * is answered under its own id; null when no valid id can be found.
+ */
+export const requestId = (message: unknown): Id => {
+  if (typeof message !== "object" || message === null || Array.isArray(message) || !("id" in message))
+    return null;
+  const { id } = message;
+  return typeof id === "string" || (typeof id === "number" && Number.isInteger(id)) ? id : null;
+};
+
 interface RpcResponse {
   readonly jsonrpc: "2.0";
   readonly id: Id;
@@ -39,9 +52,14 @@ const requestSchema = z.object({
   params: z.unknown().optional(),
 });
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 const callParamsSchema = z.object({
   name: z.string().min(1),
-  arguments: z.record(z.string(), z.unknown()).optional(),
+  // Passed through untouched: rebuilding the object (as z.record does) would
+  // silently drop keys such as __proto__ that the tool's own schema reports.
+  arguments: z.custom<Record<string, unknown>>(isPlainObject, "Must be an object").optional(),
 });
 
 const initializeParamsSchema = z.object({ protocolVersion: z.string() });
@@ -108,7 +126,7 @@ export const createMcpHandler =
     const request = requestSchema.safeParse(message);
     if (!request.success)
       return rpcError(
-        null,
+        requestId(message),
         JSONRPC.invalidRequest,
         "Invalid request",
         invalidInput("The message is not a JSON-RPC 2.0 request", issuesFromZod(request.error)),
@@ -173,25 +191,68 @@ export const createMcpHandler =
     }
   };
 
+type Line = { readonly text: string } | { readonly oversized: true };
+
+/**
+ * Split a byte stream into lines without ever holding more than `maxBytes` of
+ * one line. An oversized line is discarded up to its newline and reported once.
+ */
+async function* readLines(input: NodeJS.ReadableStream, maxBytes: number): AsyncGenerator<Line> {
+  let parts: Buffer[] = [];
+  let size = 0;
+  let discarding = false;
+  for await (const chunk of input) {
+    let buffer = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+    for (;;) {
+      const newline = buffer.indexOf(0x0a);
+      const piece = buffer.subarray(0, newline === -1 ? buffer.length : newline);
+      if (!discarding && size + piece.length > maxBytes) {
+        discarding = true;
+        parts = [];
+        size = 0;
+      }
+      if (!discarding) {
+        parts.push(piece);
+        size += piece.length;
+      }
+      if (newline === -1) break;
+      yield discarding ? { oversized: true } : { text: Buffer.concat(parts).toString("utf8") };
+      discarding = false;
+      parts = [];
+      size = 0;
+      buffer = buffer.subarray(newline + 1);
+    }
+  }
+  if (discarding) yield { oversized: true };
+  else if (size > 0) yield { text: Buffer.concat(parts).toString("utf8") };
+}
+
 /** Serve newline-delimited JSON-RPC on the given streams until input ends. */
 export const serveMcp = async (
   context: ToolContext,
   input: NodeJS.ReadableStream,
   write: (line: string) => void,
+  options: { readonly maxLineBytes?: number } = {},
 ): Promise<void> => {
   const handle = createMcpHandler(context);
-  const lines = createInterface({ input, crlfDelay: Number.POSITIVE_INFINITY });
-  for await (const line of lines) {
-    if (line.trim().length === 0) continue;
+  const maxLineBytes = options.maxLineBytes ?? MAX_MCP_LINE_BYTES;
+  const send = (response: RpcResponse) => {
+    write(`${JSON.stringify(response)}\n`);
+  };
+  for await (const line of readLines(input, maxLineBytes)) {
+    if ("oversized" in line) {
+      send(
+        rpcError(null, JSONRPC.invalidRequest, "Request too large", makeError("resource_limit", "The message is longer than the supported line length", { limit_bytes: maxLineBytes })),
+      );
+      continue;
+    }
+    const text = line.text.endsWith("\r") ? line.text.slice(0, -1) : line.text;
+    if (text.trim().length === 0) continue;
     let message: unknown;
     try {
-      message = JSON.parse(line) as unknown;
+      message = JSON.parse(text) as unknown;
     } catch {
-      write(
-        `${JSON.stringify(
-          rpcError(null, JSONRPC.parseError, "Parse error", invalidInput("The line is not valid JSON", [{ path: "$", message: "Invalid JSON" }])),
-        )}\n`,
-      );
+      send(rpcError(null, JSONRPC.parseError, "Parse error", invalidInput("The line is not valid JSON", [{ path: "$", message: "Invalid JSON" }])));
       continue;
     }
     let response: RpcResponse | null;
@@ -204,18 +265,13 @@ export const serveMcp = async (
         error_class: cause instanceof Error ? cause.name : typeof cause,
         correlation_id: correlationId,
       });
-      const id =
-        typeof message === "object" && message !== null && "id" in message &&
-        (typeof message.id === "string" || typeof message.id === "number")
-          ? message.id
-          : null;
       response = rpcError(
-        id,
+        requestId(message),
         JSONRPC.internalError,
         "Internal error",
         makeError("internal_error", "The server failed unexpectedly", { correlation_id: correlationId }),
       );
     }
-    if (response !== null) write(`${JSON.stringify(response)}\n`);
+    if (response !== null) send(response);
   }
 };

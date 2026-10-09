@@ -53,6 +53,13 @@ export const COMMANDS: Readonly<Record<string, CommandSpec>> = {
 /** Input fields that hold local paths; relative values are resolved against the working directory. */
 const PATH_FIELDS = new Set(["path", "left_path", "right_path", "fixture_path"]);
 
+/**
+ * Resolve a relative path against the working directory. An empty value is
+ * passed through unchanged: resolving it would silently name the working
+ * directory, where MCP would report the same input as invalid.
+ */
+const resolvePath = (cwd: string, value: string): string => (value === "" ? value : resolve(cwd, value));
+
 export const usage = (): string =>
   [
     `Revscope ${PRODUCT_VERSION} (pre-release foundation; no real binary analysis provider yet)`,
@@ -114,7 +121,7 @@ const buildInput = async (
   const input: Record<string, unknown> = {};
   spec.positionals.forEach((field, index) => {
     const value = parsed.positionals[index];
-    if (value !== undefined) input[field] = PATH_FIELDS.has(field) ? resolve(io.cwd, value) : value;
+    if (value !== undefined) input[field] = PATH_FIELDS.has(field) ? resolvePath(io.cwd, value) : value;
   });
 
   if (spec.tool === "stub_analysis") {
@@ -124,12 +131,14 @@ const buildInput = async (
     if (typeof inline === "string" && typeof file === "string")
       return { output: usageError([{ path: "steps", message: "Use either --steps or --steps-file, not both" }]) };
     if (typeof inline === "string") {
+      // Depth and lossy keys are checked by the tool's schema, as for MCP arguments.
       try {
         input["steps"] = JSON.parse(inline) as unknown;
       } catch {
         return { output: usageError([{ path: "steps", message: "Not valid JSON" }]) };
       }
     } else if (typeof file === "string") {
+      if (file === "") return { output: usageError([{ path: "steps-file", message: "Must not be empty" }]) };
       const steps = await context.jsonReader.read(resolve(io.cwd, file));
       if (!steps.ok) return { output: { ok: false, error: steps.error } };
       input["steps"] = steps.value;

@@ -1,7 +1,8 @@
 import { lstat, readFile } from "node:fs/promises";
 
 import type { JsonFileReader } from "../application/ports.js";
-import { invalidInput, makeError, type ErrorEnvelope } from "../domain/errors.js";
+import { invalidInput, jsonShapeError, makeError, type ErrorEnvelope } from "../domain/errors.js";
+import { jsonShapeIssue } from "../domain/json.js";
 import { err, ok, type Result } from "../domain/result.js";
 import { filesystemError } from "./fsArtifactReader.js";
 
@@ -33,10 +34,13 @@ export class FsJsonFileReader implements JsonFileReader {
     } catch (cause: unknown) {
       return err(filesystemError(cause, path));
     }
+    let value: unknown;
     try {
-      return ok(JSON.parse(text) as unknown);
+      value = JSON.parse(text) as unknown;
     } catch {
       return err(invalidInput("The input file is not valid JSON", [{ path: "$", message: "Invalid JSON" }]));
     }
+    const shape = jsonShapeIssue(value);
+    return shape === null ? ok(value) : err(jsonShapeError(shape));
   }
 }

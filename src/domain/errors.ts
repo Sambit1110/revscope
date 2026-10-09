@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-import { jsonObjectSchema, type JsonObject } from "./json.js";
+import {
+  MAX_JSON_DEPTH,
+  jsonObjectSchema,
+  jsonShapeMessage,
+  type JsonObject,
+  type JsonShapeIssue,
+} from "./json.js";
 
 /** Broad failure classes; each stable code belongs to exactly one category. */
 export const ERROR_CATEGORIES = [
@@ -199,3 +205,11 @@ export const invalidInput = (
   makeError("invalid_input", message, {
     issues: issues.map(({ path, message: text }) => ({ path, message: text })),
   });
+
+/** Too deep is a resource limit; a lossy key is invalid input. Paths only, never values. */
+export const jsonShapeError = (issue: JsonShapeIssue): ErrorEnvelope =>
+  issue.kind === "too_deep"
+    ? makeError("resource_limit", jsonShapeMessage(issue), { limit_depth: MAX_JSON_DEPTH, path: issue.path })
+    : invalidInput("The JSON input contains an unsupported key", [
+        { path: issue.path, message: jsonShapeMessage(issue) },
+      ]);

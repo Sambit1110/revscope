@@ -42,6 +42,14 @@
 
 - **JSON inputs** (bundles, fixtures, steps files) are read into memory and
   are limited to 16 MiB.
+- **JSON nesting is limited to 64 levels** wherever JSON enters: files, MCP
+  tool arguments and CLI `--steps`. A deeper JSON file is refused with
+  `resource_limit`; a deeper value inside tool input is refused as
+  `invalid_input` by the tool's schema.
+- **Object keys named `__proto__` are refused**, not silently dropped:
+  JavaScript cannot hold such a key as ordinary data through validation.
+- **MCP lines are limited to 4 MiB.** A longer line is discarded without
+  being buffered and answered with a `resource_limit` error.
 - **Symbolic links are not followed** by `inspect-artifact`; the caller must
   select the target file directly.
 - **Comparison pairs records** by subject, operation and canonical

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { classifyHeader } from "../../src/domain/artifactFormat.js";
-import { canonicalJson } from "../../src/domain/json.js";
+import { MAX_JSON_DEPTH, canonicalJson, jsonShapeIssue, jsonValueSchema } from "../../src/domain/json.js";
 
 const bytes = (...values: number[]) => Uint8Array.from(values);
 
@@ -35,5 +35,30 @@ describe("canonical JSON", () => {
       '{"a":null,"b":[{"c":2,"d":1}]}',
     );
     expect(() => canonicalJson(Number.NaN)).toThrow(TypeError);
+  });
+});
+
+const nested = (depth: number): unknown => {
+  let value: unknown = 1;
+  for (let level = 0; level < depth; level += 1) value = [value];
+  return value;
+};
+
+describe("JSON shape limits", () => {
+  it("accepts nesting up to the limit and rejects deeper input without exhausting the stack", () => {
+    expect(jsonValueSchema.safeParse(nested(MAX_JSON_DEPTH)).success).toBe(true);
+    expect(jsonShapeIssue(nested(MAX_JSON_DEPTH + 1))).toMatchObject({ kind: "too_deep" });
+    // Far deeper than the recursive schema could survive; rejected by the iterative check first.
+    const parsed = jsonValueSchema.safeParse(nested(50_000));
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]?.message).toContain("nesting exceeds");
+  });
+
+  it("rejects __proto__ keys anywhere instead of silently dropping them", () => {
+    const value = JSON.parse('{"a": [{"b": {"__proto__": {"x": 1}}}]}') as unknown;
+    expect(jsonShapeIssue(value)).toEqual({ kind: "lossy_key", path: "$.a.0.b.__proto__" });
+    expect(jsonValueSchema.safeParse(value).success).toBe(false);
+    // An array index is never a key, and an ordinary key named like it is fine.
+    expect(jsonShapeIssue({ proto: 1, list: ["__proto__"] })).toBeNull();
   });
 });

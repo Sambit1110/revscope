@@ -256,6 +256,22 @@ The MCP layer is a small hand-written JSON-RPC server
 validation failures use Revscope's own envelope. Tool schemas are generated
 from the same zod schemas as draft-07 JSON Schema with an object root.
 
+- **Framing:** each message is one line of at most 4 MiB. Lines are split
+  from the byte stream directly, so an oversized line is discarded without
+  being held in memory and answered with `resource_limit`.
+- **Request ids:** every response, including a rejection of a malformed
+  request or an internal error, carries the request's id when it is a valid
+  JSON-RPC id (a string or an integer), and `null` otherwise.
+- **Tool arguments** reach the tool exactly as parsed, so the tool's schema,
+  not the transport, decides what is invalid. That keeps MCP envelopes
+  identical to the CLI's and the application's.
+
+**Paths at the tool boundary** must be non-empty, absolute and free of NUL
+characters. The CLI resolves relative paths against its working directory,
+but passes an empty value through unchanged, so `inspect-artifact ""` is
+reported as `invalid_input` by every interface instead of silently naming
+the working directory.
+
 Compatibility is checked with the official MCP SDK client, a dev-only
 dependency, in `tests/e2e/mcpSdk.test.ts`. That client validates every
 `structuredContent` value against the advertised `outputSchema`.

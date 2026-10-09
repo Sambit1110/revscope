@@ -8,6 +8,29 @@ import { fixturePath, testContext } from "../support/context.js";
 
 const handler = () => createMcpHandler(testContext().context);
 
+interface Response {
+  readonly id: unknown;
+  readonly result?: { isError: boolean; structuredContent: { ok: boolean; error?: { code: string; details: Record<string, unknown> } } };
+  readonly error?: { code: number; data: { error: { code: string; details: Record<string, unknown> } } };
+}
+
+/** Feed raw chunks to the stdio server and collect its responses. */
+const serve = async (
+  chunks: readonly (string | Buffer)[],
+  options: Parameters<typeof serveMcp>[3] = {},
+  context = testContext().context,
+): Promise<Response[]> => {
+  const stdin = new PassThrough();
+  const lines: string[] = [];
+  const served = serveMcp(context, stdin, (line) => lines.push(line), options);
+  for (const chunk of chunks) stdin.write(chunk);
+  stdin.end();
+  await served;
+  return lines.map((line) => JSON.parse(line) as Response);
+};
+
+const jsonLine = (message: unknown) => `${JSON.stringify(message)}\n`;
+
 describe("MCP protocol handling", () => {
   it("negotiates a supported protocol version and falls back to the newest", async () => {
     const handle = handler();
@@ -69,5 +92,67 @@ describe("MCP protocol handling", () => {
     const responses = lines.map((line) => JSON.parse(line) as { id: unknown; error?: { code: number } });
     expect(responses.map(({ id }) => id)).toEqual([1, null, 2]);
     expect(responses[1]?.error?.code).toBe(-32700);
+  });
+
+  it("answers a rejected request under its own id when that id is valid", async () => {
+    const responses = await serve([
+      jsonLine({ jsonrpc: "2.0", id: 7, method: 5 }),
+      jsonLine({ jsonrpc: "1.0", id: "abc", method: "ping" }),
+      jsonLine({ jsonrpc: "2.0", id: 1.5, method: "ping" }),
+      jsonLine({ jsonrpc: "2.0", id: 0, method: "ping" }),
+    ]);
+    expect(responses.map(({ id }) => id)).toEqual([7, "abc", null, 0]);
+    expect(responses.slice(0, 3).map(({ error }) => error?.code)).toEqual([-32600, -32600, -32600]);
+  });
+
+  it("reports an internal failure under the request's id with a correlation id and no details", async () => {
+    const { context, logs } = testContext({
+      logger: {
+        ...testContext().context.logger,
+        info: () => {
+          throw new Error("logger exploded at /Users/secret EXPLODE_SECRET");
+        },
+        error: (entry) => {
+          logs.push(JSON.stringify(entry));
+        },
+      },
+    });
+    const [response] = await serve(
+      [jsonLine({ jsonrpc: "2.0", id: "req-42", method: "tools/call", params: { name: "inspect_artifact", arguments: { path: fixturePath("artifacts", "notes.txt") } } })],
+      {},
+      context,
+    );
+    expect(response?.id).toBe("req-42");
+    expect(response?.error?.code).toBe(-32603);
+    expect(response?.error?.data.error).toMatchObject({ code: "internal_error", details: { correlation_id: "cor_test" } });
+    expect(JSON.stringify(response)).not.toContain("EXPLODE_SECRET");
+    expect(logs.join("")).toContain("mcp_internal_error");
+  });
+
+  it("rejects an oversized line without buffering it and keeps serving", async () => {
+    const big = `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"pad":"${"x".repeat(300)}"}}`;
+    const responses = await serve(
+      [big.slice(0, 100), big.slice(100, 250), `${big.slice(250)}\n`, jsonLine({ jsonrpc: "2.0", id: 2, method: "ping" })],
+      { maxLineBytes: 128 },
+    );
+    expect(responses).toHaveLength(2);
+    expect(responses[0]?.error?.code).toBe(-32600);
+    expect(responses[0]?.error?.data.error).toMatchObject({ code: "resource_limit", details: { limit_bytes: 128 } });
+    expect(responses[1]).toMatchObject({ id: 2, result: {} });
+  });
+
+  it("accepts CRLF line endings, lines split across chunks, and a final line without a newline", async () => {
+    const ping = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" });
+    const responses = await serve([`${ping.slice(0, 10)}`, `${ping.slice(10)}\r\n`, JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" })]);
+    expect(responses.map(({ id }) => id)).toEqual([1, 2]);
+  });
+
+  it("hands tool arguments to the tool unchanged, so a __proto__ key is reported rather than dropped", async () => {
+    const [response] = await serve([
+      `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"inspect_artifact","arguments":{"__proto__":{"path":"${fixturePath("artifacts", "notes.txt")}"}}}}\n`,
+    ]);
+    expect(response?.result?.isError).toBe(true);
+    expect(response?.result?.structuredContent.error?.code).toBe("invalid_input");
+    expect(JSON.stringify(response?.result?.structuredContent.error?.details)).toContain("__proto__");
   });
 });

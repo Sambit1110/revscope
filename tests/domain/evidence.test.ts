@@ -48,6 +48,11 @@ describe("evidence creation", () => {
     expect(parseEvidence(evidence)).toEqual({ ok: true, value: evidence });
   });
 
+  it("refuses a payload with a __proto__ key rather than recording it without that key", () => {
+    const payload = JSON.parse('{"__proto__": {"admin": true}, "size_bytes": 12}') as EvidenceDraft["payload"];
+    expect(createEvidence(artifactDraft({ payload })).ok).toBe(false);
+  });
+
   it("produces identical identifiers regardless of property order", () => {
     const first = create(artifactDraft({ payload: { a: 1, b: 2 } }));
     const second = create(artifactDraft({ payload: { b: 2, a: 1 } }));

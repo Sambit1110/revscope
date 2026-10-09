@@ -52,6 +52,12 @@ const viaMcp = async (context: ToolContext, tool: string, input: unknown) => {
   return response.error?.data;
 };
 
+const nested = (depth: number): unknown => {
+  let value: unknown = 1;
+  for (let level = 0; level < depth; level += 1) value = [value];
+  return value;
+};
+
 const cases = async (): Promise<Case[]> => {
   const directory = await tempDir();
   const tampered = join(directory, "tampered.json");
@@ -69,6 +75,12 @@ const cases = async (): Promise<Case[]> => {
   await writeFile(notJson, "{not json");
   const absent = join(directory, "absent.bin");
   const unsupportedSteps = [{ action: "read", operation: "trace_calls" }];
+  const deepFile = join(directory, "deep.json");
+  await writeFile(deepFile, JSON.stringify({ records: nested(100) }));
+  const lossyFile = join(directory, "lossy.json");
+  await writeFile(lossyFile, '{"records": [], "meta": {"__proto__": {"polluted": true}}}');
+  const deepSteps = [{ action: "read", operation: "get_name", params: { deep: nested(100) } }];
+  const lossySteps = JSON.parse('[{"action": "read", "operation": "list_names", "params": {"__proto__": {"x": 1}}}]') as unknown[];
   const partialSteps = [
     { action: "mutate", operation: "rename", params: { names: { "0x1000": "entry", "0x2000": "util" } } },
   ];
@@ -136,6 +148,48 @@ const cases = async (): Promise<Case[]> => {
       context: () => exploding().context,
     },
     {
+      label: "empty path",
+      code: "invalid_input",
+      tool: "inspect_artifact",
+      input: { path: "" },
+      argv: ["inspect-artifact", ""],
+    },
+    {
+      label: "path containing NUL",
+      code: "invalid_input",
+      tool: "inspect_artifact",
+      input: { path: "/tmp/revscope\0probe" },
+      argv: ["inspect-artifact", "/tmp/revscope\0probe"],
+    },
+    {
+      label: "JSON file nested beyond the limit",
+      code: "resource_limit",
+      tool: "report_evidence",
+      input: { path: deepFile },
+      argv: ["report-evidence", deepFile],
+    },
+    {
+      label: "JSON file with a lossy __proto__ key",
+      code: "invalid_input",
+      tool: "report_evidence",
+      input: { path: lossyFile },
+      argv: ["report-evidence", lossyFile],
+    },
+    {
+      label: "inline steps nested beyond the limit",
+      code: "invalid_input",
+      tool: "stub_analysis",
+      input: { fixture_path: fixturePath("stub", "database.json"), steps: deepSteps },
+      argv: ["stub-analysis", fixturePath("stub", "database.json"), "--steps", JSON.stringify(deepSteps)],
+    },
+    {
+      label: "inline steps with a lossy __proto__ key",
+      code: "invalid_input",
+      tool: "stub_analysis",
+      input: { fixture_path: fixturePath("stub", "database.json"), steps: lossySteps },
+      argv: ["stub-analysis", fixturePath("stub", "database.json"), "--steps", JSON.stringify(lossySteps)],
+    },
+    {
       label: "unknown tool",
       code: "unknown_tool",
       tool: "no_such_tool",
@@ -193,6 +247,7 @@ describe("one error contract across interfaces", () => {
       ["inspect-artifact", "--deep", "a"],
       ["stub-analysis", "f.json", "--steps", "{"],
       ["stub-analysis", "f.json", "--steps", "[]", "--steps-file", "s.json"],
+      ["stub-analysis", "f.json", "--steps-file", ""],
     ]) {
       const { output, exitCode } = await viaCli(context, argv);
       const parsed = failureOutputSchema.safeParse(output);
