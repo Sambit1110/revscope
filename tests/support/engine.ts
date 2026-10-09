@@ -7,7 +7,7 @@ import type {
   BinaryAnalysisRun,
   ProviderCapability,
 } from "../../src/application/ports.js";
-import type { ErrorEnvelope } from "../../src/domain/errors.js";
+import { makeError, type ErrorEnvelope } from "../../src/domain/errors.js";
 import type { JsonObject } from "../../src/domain/json.js";
 import { err, ok, type Result } from "../../src/domain/result.js";
 
@@ -79,6 +79,33 @@ export class ScriptedEngine implements BinaryAnalysisEngine {
   analyze(request: BinaryAnalysisRequest) {
     this.requests.push(request);
     return Promise.resolve(this.outcome(request));
+  }
+}
+
+/** An engine that runs until released or cancelled, as a long analysis does. */
+export class WaitingEngine implements BinaryAnalysisEngine {
+  readonly started: BinaryAnalysisRequest[] = [];
+  readonly cancelled: BinaryAnalysisRequest[] = [];
+  #release: () => void = () => undefined;
+  readonly #released = new Promise<void>((resolve) => {
+    this.#release = resolve;
+  });
+
+  release() {
+    this.#release();
+  }
+
+  async analyze(request: BinaryAnalysisRequest): Promise<Result<BinaryAnalysisRun, ErrorEnvelope>> {
+    this.started.push(request);
+    const aborted = new Promise<"aborted">((resolve) => {
+      if (request.signal.aborted) resolve("aborted");
+      request.signal.addEventListener("abort", () => resolve("aborted"), { once: true });
+    });
+    if ((await Promise.race([this.#released.then(() => "released" as const), aborted])) === "aborted") {
+      this.cancelled.push(request);
+      return err(makeError("cancelled", "The analysis was cancelled", {}));
+    }
+    return ok(memoryRun());
   }
 }
 

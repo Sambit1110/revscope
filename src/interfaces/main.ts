@@ -14,6 +14,8 @@ export interface ProcessIo {
   readonly stdin: NodeJS.ReadableStream;
   readonly stdout: (text: string) => void;
   readonly stderr: (text: string) => void;
+  /** Aborted when the process is asked to stop (SIGINT, SIGTERM); running work is cancelled. */
+  readonly signal?: AbortSignal;
 }
 
 /** Entry point shared by the executable and in-process tests. */
@@ -34,10 +36,15 @@ export const main = async (io: ProcessIo): Promise<number> => {
         io.stdout(renderJson({ ok: false, error: makeError("invalid_input", "mcp takes no arguments", { issues: [{ path: "$argv.1", message: "Unexpected argument" }] }) }));
         return EXIT_CODES.invalid_input;
       }
-      await serveMcp(context, io.stdin, io.stdout);
+      await serveMcp(context, io.stdin, io.stdout, io.signal === undefined ? {} : { signal: io.signal });
       return 0;
     }
-    return await runCli(io.argv, { stdout: io.stdout, cwd: io.cwd }, context);
+    return await runCli(
+      io.argv,
+      { stdout: io.stdout, cwd: io.cwd },
+      context,
+      io.signal === undefined ? undefined : { signal: io.signal },
+    );
   } catch (cause: unknown) {
     // Last resort: never print a stack trace or host details to the caller.
     const correlationId = `cor_${randomUUID().replaceAll("-", "")}`;

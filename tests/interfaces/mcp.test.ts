@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { TOOLS } from "../../src/application/tools/registry.js";
 import { toolOutputSchema } from "../../src/application/tools/types.js";
-import { createMcpHandler, listTools, serveMcp } from "../../src/interfaces/mcp.js";
+import { MAX_PENDING_REQUESTS, createMcpHandler, listTools, serveMcp } from "../../src/interfaces/mcp.js";
+import { WaitingEngine } from "../support/engine.js";
 import { fixturePath, testContext } from "../support/context.js";
 
 const handler = () => createMcpHandler(testContext().context);
@@ -30,6 +31,22 @@ const serve = async (
 };
 
 const jsonLine = (message: unknown) => `${JSON.stringify(message)}\n`;
+
+const analyzeCall = (id: number) =>
+  jsonLine({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "analyze_binary", arguments: { path: "/tmp/sample.bin", authorized: true } } });
+const cancel = (requestId: number) => jsonLine({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId, reason: "user" } });
+const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+const start = (engine: WaitingEngine, options: Parameters<typeof serveMcp>[3] = {}) => {
+  const stdin = new PassThrough();
+  const lines: string[] = [];
+  const served = serveMcp(testContext({ binaryAnalysis: engine }).context, stdin, (text) => lines.push(text), options);
+  return {
+    stdin,
+    served,
+    responses: () => lines.map((text) => JSON.parse(text) as Response),
+  };
+};
 
 describe("MCP protocol handling", () => {
   it("negotiates a supported protocol version and falls back to the newest", async () => {
@@ -154,5 +171,71 @@ describe("MCP protocol handling", () => {
     expect(response?.result?.isError).toBe(true);
     expect(response?.result?.structuredContent.error?.code).toBe("invalid_input");
     expect(JSON.stringify(response?.result?.structuredContent.error?.details)).toContain("__proto__");
+  });
+
+  describe("cancellation", () => {
+    it("aborts a running request when the client cancels it, and sends no response for it", async () => {
+      const engine = new WaitingEngine();
+      const server = start(engine);
+      server.stdin.write(analyzeCall(1));
+      await tick();
+      expect(engine.started).toHaveLength(1);
+      server.stdin.write(cancel(1));
+      server.stdin.end(jsonLine({ jsonrpc: "2.0", id: 2, method: "ping" }));
+      await server.served;
+      expect(engine.cancelled).toHaveLength(1);
+      expect(server.responses().map(({ id }) => id)).toEqual([2]);
+    });
+
+    it("cancels a queued request before it starts, without disturbing the running one", async () => {
+      const engine = new WaitingEngine();
+      const server = start(engine);
+      server.stdin.write(analyzeCall(1));
+      server.stdin.write(analyzeCall(2));
+      await tick();
+      server.stdin.write(cancel(2));
+      await tick();
+      engine.release();
+      server.stdin.end();
+      await server.served;
+      expect(server.responses().map(({ id }) => id)).toEqual([1]);
+      expect(engine.cancelled.map(({ signal }) => signal.aborted)).toEqual([true]);
+    });
+
+    it("ignores cancellations for unknown requests", async () => {
+      const engine = new WaitingEngine();
+      engine.release();
+      const server = start(engine);
+      server.stdin.write(cancel(99));
+      server.stdin.end(analyzeCall(1));
+      await server.served;
+      expect(server.responses()).toMatchObject([{ id: 1, result: { isError: false } }]);
+    });
+
+    it("cancels running work on shutdown and still answers it", async () => {
+      const engine = new WaitingEngine();
+      const shutdown = new AbortController();
+      const server = start(engine, { signal: shutdown.signal });
+      server.stdin.write(analyzeCall(1));
+      await tick();
+      shutdown.abort();
+      server.stdin.end();
+      await server.served;
+      expect(server.responses()).toMatchObject([{ id: 1, result: { isError: true, structuredContent: { error: { code: "cancelled" } } } }]);
+    });
+
+    it("refuses requests beyond the pending limit instead of queueing them without bound", async () => {
+      const engine = new WaitingEngine();
+      const server = start(engine);
+      for (let id = 1; id <= MAX_PENDING_REQUESTS + 2; id += 1) server.stdin.write(analyzeCall(id));
+      await tick();
+      const refused = server.responses();
+      expect(refused.map(({ id }) => id)).toEqual([MAX_PENDING_REQUESTS + 1, MAX_PENDING_REQUESTS + 2]);
+      expect(refused[0]?.error?.data.error).toMatchObject({ code: "resource_limit" });
+      engine.release();
+      server.stdin.end();
+      await server.served;
+      expect(server.responses()).toHaveLength(MAX_PENDING_REQUESTS + 2);
+    });
   });
 });

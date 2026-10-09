@@ -3,7 +3,12 @@ import { parseArgs, type ParseArgsConfig } from "node:util";
 
 import { TOOLS, executeTool, unknownToolError } from "../application/tools/registry.js";
 import { PRODUCT_VERSION } from "../application/tools/builtinCapabilities.js";
-import type { ToolContext, ToolOutput } from "../application/tools/types.js";
+import {
+  uncancellableCall,
+  type ToolCall,
+  type ToolContext,
+  type ToolOutput,
+} from "../application/tools/types.js";
 import { invalidInput, type InputIssue } from "../domain/errors.js";
 import { exitCodeFor, renderJson } from "./output.js";
 
@@ -12,12 +17,19 @@ export interface CliIo {
   readonly cwd: string;
 }
 
+/** How a command-line option sets a tool input field. */
+type FlagMapping =
+  | { readonly field: string; readonly kind: "set-true" | "set-false" }
+  | { readonly field: string; readonly kind: "integer" };
+
 interface CommandSpec {
   readonly tool: string;
   /** Positional arguments in order, each mapped to a tool input field. */
   readonly positionals: readonly string[];
   readonly usage: string;
   readonly options?: ParseArgsConfig["options"];
+  /** Options mapped directly onto tool input fields; the tool validates the values. */
+  readonly flags?: Readonly<Record<string, FlagMapping>>;
 }
 
 /** CLI commands are thin aliases for tools; validation happens in the tool layer. */
@@ -48,7 +60,33 @@ export const COMMANDS: Readonly<Record<string, CommandSpec>> = {
       "continue-on-error": { type: "boolean" },
     },
   },
+  "analyze-binary": {
+    tool: "analyze_binary",
+    positionals: ["path"],
+    usage:
+      "revscope analyze-binary <binary> --authorized [--timeout-ms <ms>] [--max-functions <n>] [--decompile-timeout-ms <ms>] [--no-decompile]",
+    options: {
+      authorized: { type: "boolean" },
+      "timeout-ms": { type: "string" },
+      "max-functions": { type: "string" },
+      "decompile-timeout-ms": { type: "string" },
+      "no-decompile": { type: "boolean" },
+    },
+    flags: {
+      authorized: { field: "authorized", kind: "set-true" },
+      "timeout-ms": { field: "timeout_ms", kind: "integer" },
+      "max-functions": { field: "max_functions", kind: "integer" },
+      "decompile-timeout-ms": { field: "decompile_timeout_ms", kind: "integer" },
+      "no-decompile": { field: "decompile", kind: "set-false" },
+    },
+  },
 };
+
+/**
+ * A decimal integer becomes a number; anything else is passed through as
+ * text, so the tool's schema reports it exactly as it would over MCP.
+ */
+const integerOption = (text: string): number | string => (/^-?\d{1,15}$/u.test(text) ? Number(text) : text);
 
 /** Input fields that hold local paths; relative values are resolved against the working directory. */
 const PATH_FIELDS = new Set(["path", "left_path", "right_path", "fixture_path"]);
@@ -69,6 +107,9 @@ export const usage = (): string =>
     "  revscope tools          List tools as JSON",
     "  revscope mcp            Serve the same tools over MCP (stdio)",
     "  revscope version",
+    "",
+    "analyze-binary needs a Ghidra installation (REVSCOPE_GHIDRA_DIR) and --authorized, which records",
+    "that you are authorized to analyze the file; Revscope cannot verify it. The binary is never executed.",
     "",
     "Tool commands print one JSON document on stdout: {\"ok\": true, ...} or {\"ok\": false, \"error\": {...}}.",
     "",
@@ -124,8 +165,16 @@ const buildInput = async (
     if (value !== undefined) input[field] = PATH_FIELDS.has(field) ? resolvePath(io.cwd, value) : value;
   });
 
+  const values = parsed.values as Record<string, string | boolean | undefined>;
+  for (const [option, mapping] of Object.entries(spec.flags ?? {})) {
+    const given = values[option];
+    if (given === undefined) continue;
+    if (mapping.kind === "set-true") input[mapping.field] = true;
+    else if (mapping.kind === "set-false") input[mapping.field] = false;
+    else if (typeof given === "string") input[mapping.field] = integerOption(given);
+  }
+
   if (spec.tool === "stub_analysis") {
-    const values = parsed.values as Record<string, string | boolean | undefined>;
     const inline = values["steps"];
     const file = values["steps-file"];
     if (typeof inline === "string" && typeof file === "string")
@@ -153,6 +202,7 @@ export const runCli = async (
   argv: readonly string[],
   io: CliIo,
   context: ToolContext,
+  call: ToolCall = uncancellableCall(),
 ): Promise<number> => {
   const [command, ...args] = argv;
   if (command === undefined || command === "help" || command === "--help" || command === "-h") {
@@ -184,7 +234,7 @@ export const runCli = async (
       ? { ok: false, error: unknownToolError(command) }
       : await (async () => {
           const built = await buildInput(spec, args, io, context);
-          return "output" in built ? built.output : executeTool(context, spec.tool, built.input);
+          return "output" in built ? built.output : executeTool(context, spec.tool, built.input, call);
         })();
   io.stdout(renderJson(output));
   return exitCodeFor(output);

@@ -10,6 +10,10 @@ import { runCli } from "../../src/interfaces/cli.js";
 import { serveMcp } from "../../src/interfaces/mcp.js";
 import { EXIT_CODES } from "../../src/interfaces/output.js";
 import { exploding, fixturePath, tempDir, testContext } from "../support/context.js";
+import { fakeEngine, fakeGhidra, type FakeControl } from "../support/fakeGhidra.js";
+import { exportText } from "../support/ghidraExport.js";
+import { makeElf } from "../fixtures/binaries/make-elf.mjs";
+import { GhidraEngine } from "../../src/infrastructure/ghidra/engine.js";
 
 /** One failure scenario expressed for every interface. */
 interface Case {
@@ -58,6 +62,26 @@ const nested = (depth: number): unknown => {
   return value;
 };
 
+/** A tool context whose engine is a fake Ghidra installation behaving as `control` says. */
+const fakeGhidraContext = async (control: FakeControl, maxChildRunMs?: number) => {
+  const fake = await fakeGhidra(control);
+  const engine = await fakeEngine(fake, maxChildRunMs === undefined ? {} : { maxChildRunMs });
+  return testContext({ binaryAnalysis: engine }).context;
+};
+
+/** The structured result of a successful MCP tool call, checked against its text block. */
+const viaMcpSuccess = async (context: ToolContext, tool: string, input: unknown) => {
+  const stdin = new PassThrough();
+  const lines: string[] = [];
+  const served = serveMcp(context, stdin, (line) => lines.push(line));
+  stdin.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: input } })}\n`);
+  await served;
+  const response = JSON.parse(lines[0] ?? "null") as { result: { isError: boolean; structuredContent: unknown; content: { text: string }[] } };
+  expect(response.result.isError).toBe(false);
+  expect(JSON.parse(response.result.content[0]?.text ?? "null")).toEqual(response.result.structuredContent);
+  return response.result.structuredContent;
+};
+
 const cases = async (): Promise<Case[]> => {
   const directory = await tempDir();
   const tampered = join(directory, "tampered.json");
@@ -84,7 +108,89 @@ const cases = async (): Promise<Case[]> => {
   const partialSteps = [
     { action: "mutate", operation: "rename", params: { names: { "0x1000": "entry", "0x2000": "util" } } },
   ];
+  const binary = join(directory, "fixture.elf");
+  await writeFile(binary, makeElf());
+  const analysisContexts = {
+    unsupported: await fakeGhidraContext({ mode: "say", stdout: "ERROR REPORT: No load spec found for import file\n" }),
+    timeout: await fakeGhidraContext({ mode: "hang" }, 300),
+    incomplete: await fakeGhidraContext({ mode: "partial-hang", export: exportText({ trailer: null }) }, 300),
+    success: await fakeGhidraContext({ mode: "success", export: exportText() }),
+    misconfigured: testContext({ binaryAnalysis: new GhidraEngine({ settings: { ghidraDir: "relative/ghidra" } }) }).context,
+  };
+  const analysis = (extra: Record<string, unknown> = {}) => ({ path: binary, authorized: true, ...extra });
+  const analysisArgv = (...extra: string[]) => ["analyze-binary", binary, "--authorized", ...extra];
   return [
+    {
+      label: "analysis without the authorization acknowledgement",
+      code: "invalid_input",
+      tool: "analyze_binary",
+      input: { path: binary },
+      argv: ["analyze-binary", binary],
+      context: () => analysisContexts.success,
+    },
+    {
+      label: "analysis limit out of range",
+      code: "invalid_input",
+      tool: "analyze_binary",
+      input: analysis({ timeout_ms: 5 }),
+      argv: analysisArgv("--timeout-ms", "5"),
+      context: () => analysisContexts.success,
+    },
+    {
+      label: "analysis limit that is not a number",
+      code: "invalid_input",
+      tool: "analyze_binary",
+      input: analysis({ max_functions: "many" }),
+      argv: analysisArgv("--max-functions", "many"),
+      context: () => analysisContexts.success,
+    },
+    {
+      label: "analysis engine not configured",
+      code: "provider_not_configured",
+      tool: "analyze_binary",
+      input: analysis(),
+      argv: analysisArgv(),
+    },
+    {
+      label: "invalid Ghidra configuration",
+      code: "provider_not_configured",
+      tool: "analyze_binary",
+      input: analysis(),
+      argv: analysisArgv(),
+      context: () => analysisContexts.misconfigured,
+    },
+    {
+      label: "analysis of a missing binary",
+      code: "target_not_found",
+      tool: "analyze_binary",
+      input: analysis({ path: absent }),
+      argv: ["analyze-binary", absent, "--authorized"],
+      context: () => analysisContexts.success,
+    },
+    {
+      label: "binary format the engine does not recognise",
+      code: "unsupported_target",
+      tool: "analyze_binary",
+      input: analysis(),
+      argv: analysisArgv(),
+      context: () => analysisContexts.unsupported,
+    },
+    {
+      label: "analysis timeout",
+      code: "analysis_timeout",
+      tool: "analyze_binary",
+      input: analysis(),
+      argv: analysisArgv(),
+      context: () => analysisContexts.timeout,
+    },
+    {
+      label: "incomplete analysis with partial results",
+      code: "analysis_incomplete",
+      tool: "analyze_binary",
+      input: analysis(),
+      argv: analysisArgv(),
+      context: () => analysisContexts.incomplete,
+    },
     {
       label: "missing required input",
       code: "invalid_input",
@@ -224,6 +330,21 @@ describe("one error contract across interfaces", () => {
     }
   });
 
+  it("produces the same successful analysis from the application, CLI, and MCP", async () => {
+    // The export must declare the limits that were requested; a mismatch is refused as malformed.
+    const context = await fakeGhidraContext({ mode: "success", export: exportText({ maxFunctions: 50 }) });
+    const binary = join(await tempDir(), "fixture.elf");
+    await writeFile(binary, makeElf());
+    const input = { path: binary, authorized: true, max_functions: 50 };
+    const application = await viaApplication(context, "analyze_binary", input);
+    const cli = await viaCli(context, ["analyze-binary", binary, "--authorized", "--max-functions", "50"]);
+    const mcp = await viaMcpSuccess(context, "analyze_binary", input);
+    expect(application.ok).toBe(true);
+    expect(cli.exitCode).toBe(0);
+    expect(cli.output).toEqual(application);
+    expect(mcp).toEqual(application);
+  });
+
   it("never exposes stack traces, internal messages, or host paths from unexpected failures", async () => {
     const context = exploding().context;
     const outputs = [
@@ -248,6 +369,8 @@ describe("one error contract across interfaces", () => {
       ["stub-analysis", "f.json", "--steps", "{"],
       ["stub-analysis", "f.json", "--steps", "[]", "--steps-file", "s.json"],
       ["stub-analysis", "f.json", "--steps-file", ""],
+      ["analyze-binary", "/tmp/x", "--authorized=yes"],
+      ["analyze-binary", "/tmp/x", "--timeout-ms"],
     ]) {
       const { output, exitCode } = await viaCli(context, argv);
       const parsed = failureOutputSchema.safeParse(output);

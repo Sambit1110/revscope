@@ -34,8 +34,9 @@ export interface LastRun {
  * A fake Ghidra installation: support/analyzeHeadless is an executable Node.js
  * script (absolute interpreter path, no shell) that loads the fake.
  */
-export const fakeGhidra = async (control: FakeControl, version = "11.4") => {
-  const root = await tempDir();
+export const fakeGhidra = async (control: FakeControl, version = "11.4", directory?: string) => {
+  // Pass a directory the caller owns when the fake must outlive one test (tempDir() is removed after each).
+  const root = directory ?? (await tempDir());
   await mkdir(join(root, "support"));
   await mkdir(join(root, "Ghidra"));
   const launcher = join(root, "support", "analyzeHeadless");
