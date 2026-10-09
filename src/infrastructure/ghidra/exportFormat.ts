@@ -46,7 +46,11 @@ const headerSchema = z.strictObject({
     max_address: address.nullable(),
     entry_points: z.array(address).max(EXPORT_LIMITS.entryPoints),
   }),
-  analysis: z.strictObject({ timed_out: z.boolean() }),
+  analysis: z.strictObject({
+    timed_out: z.boolean(),
+    /** Whether Ghidra's native decompiler could start; on macOS it must be built locally. */
+    decompiler: z.enum(["available", "unavailable", "not-requested"]),
+  }),
   limits: z.strictObject({
     max_functions: z.number().int().min(1),
     decompile: z.boolean(),
@@ -177,6 +181,8 @@ export const parseGhidraExport = (
     return malformed(1, "the export was produced with different limits");
   if (expectations.ghidraVersion !== undefined && header.ghidra_version !== expectations.ghidraVersion)
     return malformed(1, "the export names a different Ghidra version");
+  if ((header.analysis.decompiler === "not-requested") === expectations.decompile)
+    return malformed(1, "the decompiler state contradicts the request");
 
   const functions: ExportFunction[] = [];
   const decompilations = new Map<string, ExportDecompilation>();

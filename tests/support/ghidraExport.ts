@@ -5,6 +5,7 @@ export interface ExportOptions {
   readonly maxFunctions?: number;
   readonly decompile?: boolean;
   readonly analysisTimedOut?: boolean;
+  readonly decompiler?: "available" | "unavailable" | "not-requested";
   readonly functions?: readonly {
     readonly address: string;
     readonly name: string;
@@ -36,7 +37,10 @@ export const headerRecord = (options: ExportOptions = {}) => ({
     max_address: "0x401fff",
     entry_points: ["0x401000"],
   },
-  analysis: { timed_out: options.analysisTimedOut ?? false },
+  analysis: {
+    timed_out: options.analysisTimedOut ?? false,
+    decompiler: options.decompiler ?? ((options.decompile ?? true) ? "available" : "not-requested"),
+  },
   limits: { max_functions: options.maxFunctions ?? 200, decompile: options.decompile ?? true, decompile_timeout_s: 10 },
 });
 

@@ -59,6 +59,7 @@ describe("parsing a Ghidra export", () => {
     ["a wrong schema", () => recordsToBytes([{ ...headerRecord(), schema: "other/1" }]), 1],
     ["different limits", () => recordsToBytes([headerRecord({ maxFunctions: 5 })]), 1],
     ["a different Ghidra version", () => recordsToBytes([headerRecord({ ghidraVersion: "9.0" })]), 1],
+    ["a decompiler state contradicting the request", () => recordsToBytes([headerRecord({ decompiler: "not-requested" })]), 1],
     ["an unknown field", () => recordsToBytes([header, { ...functionRecord("0x1", "f"), extra: 1 }]), 2],
     ["an unknown record type", () => recordsToBytes([header, { type: "comment" }]), 2],
     ["a duplicate function", () => recordsToBytes([header, answer, answer]), 3],

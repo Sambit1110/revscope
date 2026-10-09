@@ -70,15 +70,22 @@ public class RevscopeExport extends HeadlessScript {
 			new OutputStreamWriter(new FileOutputStream(exportPath), StandardCharsets.UTF_8));
 		DecompInterface decompiler = null;
 		try {
-			writeLine(header(program, maxFunctions, decompile, decompileTimeoutSeconds));
+			// The decompiler is a native program; on macOS it must be built locally
+			// (support/gradle buildNatives). When it cannot start, the export says so.
+			String decompilerState = "not-requested";
 			if (decompile) {
 				decompiler = new DecompInterface();
 				decompiler.setOptions(new DecompileOptions());
-				if (!decompiler.openProgram(program)) {
+				if (decompiler.openProgram(program)) {
+					decompilerState = "available";
+				}
+				else {
 					decompiler.dispose();
 					decompiler = null;
+					decompilerState = "unavailable";
 				}
 			}
+			writeLine(header(program, maxFunctions, decompile, decompileTimeoutSeconds, decompilerState));
 
 			int total = 0;
 			FunctionIterator counting = program.getFunctionManager().getFunctions(true);
@@ -139,7 +146,7 @@ public class RevscopeExport extends HeadlessScript {
 
 	// analysisTimeoutOccurred() declares the checked ImproperUseException.
 	private String header(Program program, int maxFunctions, boolean decompile,
-			int decompileTimeoutSeconds) throws Exception {
+			int decompileTimeoutSeconds, String decompilerState) throws Exception {
 		StringBuilder entries = new StringBuilder("[");
 		AddressIterator entryPoints = program.getSymbolTable().getExternalEntryPointIterator();
 		int count = 0;
@@ -168,7 +175,8 @@ public class RevscopeExport extends HeadlessScript {
 			",\"min_address\":" + nullableAddress(program.getMinAddress()) +
 			",\"max_address\":" + nullableAddress(program.getMaxAddress()) +
 			",\"entry_points\":" + entries + "}" +
-			",\"analysis\":{\"timed_out\":" + analysisTimeoutOccurred() + "}" +
+			",\"analysis\":{\"timed_out\":" + analysisTimeoutOccurred() +
+			",\"decompiler\":" + json(decompilerState) + "}" +
 			",\"limits\":{\"max_functions\":" + maxFunctions + ",\"decompile\":" + decompile +
 			",\"decompile_timeout_s\":" + decompileTimeoutSeconds + "}}";
 	}

@@ -45,6 +45,7 @@ const recordsOf = (output: ToolOutput): Evidence[] => {
 };
 
 const unknownScopes = (record: Evidence | undefined) => (record?.unknowns ?? []).map(({ scope }) => scope);
+const reasons = (record: Evidence | undefined) => (record?.unknowns ?? []).map(({ reason }) => reason).join(" ");
 
 describe("the Ghidra export provider", () => {
   it("passes the session's declaration checks and serves a stable state token", async () => {
@@ -104,6 +105,18 @@ describe("the Ghidra export provider", () => {
     const records = recordsOf(await analyze(options));
     expect(unknownScopes(records[1])).toContain(scope);
     expect(unknownScopes(records[2])).toContain(scope);
+  });
+
+  it("says plainly when Ghidra's decompiler could not start", async () => {
+    const records = recordsOf(
+      await analyze({
+        decompiler: "unavailable",
+        functions: [{ address: "0x1000", name: "a", decompilation: { status: "failed" } }],
+      }),
+    );
+    expect(records[1]?.payload).toMatchObject({ decompiler: "unavailable" });
+    expect(reasons(records[1])).toContain("native decompiler could not start");
+    expect(reasons(records.find(({ operation }) => operation.name === "decompile"))).toContain("native decompiler could not start");
   });
 
   it("returns a cut-off export as analysis_incomplete with labelled partial records", async () => {

@@ -71,6 +71,9 @@ const DECOMPILATION_UNKNOWNS: Readonly<Record<Exclude<DecompilationState, "ok">,
   "not-exported": "No decompilation of this function was exported.",
 };
 
+const DECOMPILER_UNAVAILABLE =
+  "Ghidra's native decompiler could not start, so no function was decompiled. On macOS its native component must be built for the installation (see the README).";
+
 /**
  * A read-only provider over one validated export. Its state never changes,
  * so its token is derived from the export's digest.
@@ -96,6 +99,8 @@ export class GhidraExportProvider implements AnalysisProvider {
       : [];
     const coverage: EvidenceUnknown[] = [...this.#analysisUnknowns];
     const trailer = exported.trailer;
+    if (exported.header.analysis.decompiler === "unavailable")
+      coverage.push({ scope: "decompilation", reason: DECOMPILER_UNAVAILABLE });
     if (trailer === null)
       coverage.push({ scope: "export", reason: "The export was cut off before it was complete; later functions and decompilations are missing." });
     else if (trailer.stopped === "function-limit")
@@ -127,6 +132,7 @@ export class GhidraExportProvider implements AnalysisProvider {
             entry_points: [...header.program.entry_points],
             ghidra_version: header.ghidra_version,
             analysis_timed_out: header.analysis.timed_out,
+            decompiler: header.analysis.decompiler,
             export_complete: trailer !== null,
           },
           this.#coverageUnknowns,
@@ -158,7 +164,9 @@ export class GhidraExportProvider implements AnalysisProvider {
         const decompiled = this.#export.decompilations.get(address);
         const state = this.#state(address);
         const unknowns: EvidenceUnknown[] = [...this.#analysisUnknowns];
-        if (state !== "ok") unknowns.push({ scope: "decompilation", reason: DECOMPILATION_UNKNOWNS[state] });
+        if (this.#export.header.analysis.decompiler === "unavailable")
+          unknowns.push({ scope: "decompilation", reason: DECOMPILER_UNAVAILABLE });
+        else if (state !== "ok") unknowns.push({ scope: "decompilation", reason: DECOMPILATION_UNKNOWNS[state] });
         if (decompiled?.truncated === true)
           unknowns.push({ scope: "decompilation", reason: `Pseudocode was truncated to at most ${String(EXPORT_LIMITS.pseudocodeChars)} characters.` });
         return this.#ok(
