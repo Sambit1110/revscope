@@ -179,9 +179,11 @@ describe("mutation in progress (regression for the snapshot race)", () => {
     mutationHold.release();
     value(await mutation);
     const snapshot = value(session.snapshot());
+    expect(snapshot.schema).toBe("revscope.session-snapshot/3");
     expect(snapshot.state_token).toBe(provider.stub.stateToken());
     expect(snapshot.state_token).not.toBe(before);
     expect(snapshot.mutations).toHaveLength(1);
+    expect(snapshot.mutations[0]?.confidence).toBe("reported");
   });
 
   it("returns to the verified state when a requested mutation is refused before reaching the provider", async () => {

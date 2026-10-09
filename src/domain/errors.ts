@@ -77,7 +77,7 @@ export const ERROR_CATALOG = {
     category: "integrity",
     retryable: false,
     remediation:
-      "Regenerate the evidence from its source. Records that fail validation or whose identifier does not match their content cannot be trusted.",
+      "Regenerate the evidence from its source. Records that fail validation or whose identifier does not match their content cannot be used. Passing this check shows only that a record is internally consistent, not who produced it.",
   },
   state_uncertain: {
     category: "conflict",

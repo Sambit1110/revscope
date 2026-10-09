@@ -156,7 +156,7 @@ export const createMcpHandler =
             capabilities: { tools: { listChanged: false } },
             serverInfo: { name: "revscope", version: PRODUCT_VERSION },
             instructions:
-              "Revscope tools return evidence records whose confidence and authority state how directly each claim was established. Tool failures use one error envelope: {ok:false, error:{code, category, message, retryable, remediation, details}}. The stub_analysis tool uses fixture data only.",
+              "Revscope tools return evidence records whose confidence and authority state how directly each claim was established. Evidence identifiers are unkeyed digests: they detect accidental changes but do not authenticate records loaded from files. Tool failures use one error envelope: {ok:false, error:{code, category, message, retryable, remediation, details}}. The stub_analysis tool uses fixture data only.",
           },
         };
       }

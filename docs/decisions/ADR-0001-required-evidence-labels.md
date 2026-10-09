@@ -41,8 +41,9 @@ own confidence/authority pair. A review then showed that a capability named
 - **Basis required for judgements.** Heuristic and assertion kinds must state
   their basis.
 - **Identity covers everything semantic.** The identifier is an unkeyed digest
-  of every semantic field. It establishes integrity consistency, not
-  authenticity (see `docs/architecture.md`).
+  of every semantic field. It is a consistency check that catches accidental
+  changes. Because anyone can recompute it, it establishes neither integrity
+  against deliberate edits nor authenticity (see `docs/architecture.md`).
 
 ## Consequences
 

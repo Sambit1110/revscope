@@ -134,8 +134,11 @@ table; producers cannot choose them. For example:
   provider's account of a change it made, not an observation of the
   resulting state.
 
-The identifier detects accidental or partial modification. It is an unkeyed
-digest, so it does **not** prove who produced a record.
+The identifier is an unkeyed digest of the record's content. It detects
+accidental corruption and edits that did not recompute it. Anyone who edits
+a record can recompute a matching identifier, so it proves neither who
+produced a record nor that it is unaltered. Records loaded from files are
+**unauthenticated**.
 
 See [docs/architecture.md](docs/architecture.md).
 

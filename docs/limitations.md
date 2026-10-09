@@ -27,9 +27,10 @@
   a cache hit. Recovery refuses an observation that returns a token the
   session knows was replaced. A provider that reports a change it did not
   make therefore keeps the session uncertain until its token changes.
-- **Evidence identifiers prove integrity, not authenticity.** They are
-  unkeyed digests: anyone can edit a record and recompute its identifier.
-  Records loaded from files are unauthenticated.
+- **Evidence identifiers are consistency checks only.** They are unkeyed
+  digests: they catch accidental corruption, but anyone can edit a record and
+  recompute its identifier. They prove neither that a record is unaltered nor
+  who produced it. Records loaded from files are unauthenticated.
 
 ## Interfaces
 
@@ -79,7 +80,9 @@
 
 - **Platform coverage:** only Node.js 26.9.0 on macOS arm64 has been
   exercised. See [support.md](support.md).
-- **Static scans:** the module-boundary test scans import statements with a
-  pattern rather than a full parser. It guards its own pattern against
-  becoming vacuous.
+- **Static scans:** the module-boundary test finds dependencies with patterns
+  rather than a full parser. It covers static, side-effect and dynamic
+  imports, re-exports and `require`, and flags imports it cannot read. Each
+  form is pinned by a guard test, but an unusual form a pattern does not
+  anticipate would go unseen.
 - **No continuous integration** is configured yet.

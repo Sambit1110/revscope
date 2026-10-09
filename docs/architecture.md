@@ -85,17 +85,20 @@ A provider can still choose a wrong kind within those bounds, for example
 `state-observation` for decompiler output; provider reviews must check each
 declared kind against what the operation does.
 
-### Integrity is not authenticity
+### Consistency, not integrity or authenticity
 
 The evidence identifier is an **unkeyed** SHA-256 of the record's canonical
-JSON, labels included. It detects accidental or partial modification: a record
-whose content no longer matches its identifier is rejected. It does **not**
-prove who produced a record. Anyone can edit a record and recompute a matching
-identifier. Records loaded from files, such as the inputs to
-`report-evidence` and `compare-evidence`, are therefore consistent but
-**unauthenticated**. Label rules still apply to them, so an edited record
-cannot carry contradictory labels. A future milestone may add signatures or a
-provenance chain.
+JSON, labels included. A record whose content no longer matches its
+identifier is rejected, which catches accidental corruption and careless
+edits. It is not an integrity or authenticity mechanism. Anyone who edits a
+record can recompute a matching identifier, so a record that passes is
+consistent but may have been altered, and its producer field is a claim, not
+a proof. Records loaded from files, such as the inputs to `report-evidence`
+and `compare-evidence`, are therefore **unauthenticated**. Label rules still
+apply to them, so an edited record cannot carry contradictory labels. A
+future milestone may add signatures or a provenance chain. The error code
+`evidence_integrity` names the failed consistency check; it does not imply
+that passing records are protected.
 
 ## Mutation-aware session
 

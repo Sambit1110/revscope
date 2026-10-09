@@ -26,7 +26,8 @@ import type {
   ProviderCapability,
 } from "./ports.js";
 
-export const SNAPSHOT_SCHEMA = "revscope.session-snapshot/2";
+/** Version 3 embeds revscope.evidence/3 records, whose acknowledgements are `reported`. */
+export const SNAPSHOT_SCHEMA = "revscope.session-snapshot/3";
 
 export interface Uncertainty {
   readonly operation: string;
