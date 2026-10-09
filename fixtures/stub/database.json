@@ -1,0 +1,32 @@
+{
+  "schema": "revscope.stub-database/1",
+  "artifact": {
+    "display_name": "synthetic-stub-artifact",
+    "sha256": "a4469993a06c440b34ec8c01a093f310889afc87a204eebb7be0def65d695932",
+    "size_bytes": 4096
+  },
+  "names": {
+    "0x1000": "main",
+    "0x2000": "helper",
+    "0x3000": "cleanup"
+  },
+  "functions": {
+    "0x1000": {
+      "pseudocode": "int main(void) { helper(); cleanup(); return 0; }"
+    },
+    "0x2000": {
+      "pseudocode": "void helper(void) { }"
+    }
+  },
+  "faults": {
+    "rename": {
+      "mode": "none"
+    },
+    "read": {
+      "mode": "none"
+    },
+    "state": {
+      "mode": "none"
+    }
+  }
+}

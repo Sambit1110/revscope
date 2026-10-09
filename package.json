@@ -1,0 +1,32 @@
+{
+  "name": "revscope",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Evidence-first software reverse-engineering and analysis platform (pre-release foundation).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "bin": {
+    "revscope": "dist/bin/revscope.js"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "oxlint --deny-warnings src tests",
+    "test": "npm run build && vitest run",
+    "check": "npm run typecheck && npm run lint && npm test"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@types/node": "24.19.1",
+    "oxlint": "1.87.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
+}

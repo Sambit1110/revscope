@@ -1,0 +1,8 @@
+[
+  { "action": "read", "operation": "get_name", "params": { "address": "0x1000" } },
+  { "action": "mutate", "operation": "rename", "params": { "names": { "0x1000": "entry", "0x2000": "util" } } },
+  { "action": "read", "operation": "get_name", "params": { "address": "0x1000" } },
+  { "action": "snapshot" },
+  { "action": "reconcile" },
+  { "action": "snapshot" }
+]

@@ -1,0 +1,1 @@
+Revscope fixture: a plain text artifact used for metadata inspection.

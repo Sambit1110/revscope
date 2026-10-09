@@ -1,0 +1,4 @@
+[
+  { "action": "read", "operation": "get_name", "params": { "address": "0x1000" } },
+  { "action": "read", "operation": "trace_calls", "params": {} }
+]

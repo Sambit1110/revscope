@@ -1,0 +1,186 @@
+# Architecture
+
+Revscope is a layered TypeScript (ESM) application. Dependencies point inward,
+and `tests/architecture/boundaries.test.ts` enforces it.
+
+```
+bin ──▶ interfaces ──▶ composition ──▶ infrastructure ──▶ application ──▶ domain
+                 └────────────────────────────────────────▶ application ──▶ domain
+```
+
+| Layer | Directory | Owns | May import |
+|---|---|---|---|
+| Domain | `src/domain/` | Evidence model and label rules, capability semantics, error catalog and envelope, comparison, bundle validation, format sniffing, canonical JSON | `zod`, `node:crypto`, domain |
+| Application | `src/application/` | Ports, the mutation-aware `AnalysisSession`, the tool registry and `executeTool` | domain, `zod`, `node:path` |
+| Infrastructure | `src/infrastructure/` | File readers, stub provider, environment policy, child-process launcher, logger | domain, application ports, Node built-ins |
+| Composition | `src/composition.ts` | Wires infrastructure into a `ToolContext` | everything except interfaces |
+| Interfaces | `src/interfaces/` | CLI, MCP server, configuration, output and exit codes | everything above |
+| Entry | `src/bin/revscope.ts` | Process I/O only | interfaces |
+
+## One execution path
+
+Every interface calls `executeTool(context, name, rawInput)`
+(`src/application/tools/registry.ts`). It handles the whole request:
+
+1. Looks up the tool. An unknown tool produces `unknown_tool`.
+2. Validates the input with the tool's zod schema. A failure produces
+   `invalid_input`, with the field paths and messages but never the rejected
+   values.
+3. Runs the tool, which returns a `Result`. Expected failures are values, not
+   exceptions.
+4. Re-validates the success output, including every evidence identifier.
+5. Turns any unexpected exception into `internal_error` with a correlation ID.
+   The exception class goes to the log; no message or stack trace reaches the
+   caller.
+
+The CLI only maps arguments onto tool input fields, resolving relative paths
+against the working directory. The MCP server only frames JSON-RPC. Neither
+validates tool input itself, so their error semantics cannot drift. The
+conformance suite (`tests/conformance/errorConformance.test.ts`) checks this:
+for each failure class, the application, CLI and MCP outputs must be
+**identical**.
+
+## Evidence semantics
+
+Every result has a **result kind** from a closed list
+(`RESULT_KINDS` in `src/domain/evidence.ts`). One central table,
+`RESULT_KIND_SEMANTICS`, maps each kind to its labels and constraints:
+
+| Result kind | Confidence | Authority | Allowed subjects | Produced by |
+|---|---|---|---|---|
+| `artifact-bytes` | observed | original-artifact | artifact | reads |
+| `artifact-heuristic` | inferred | original-artifact | artifact | reads (must state its basis) |
+| `engine-interpretation` | derived | analysis-engine | analysis state | reads |
+| `state-observation` | observed | analysis-state | analysis state | reads |
+| `mutation-acknowledgement` | observed | analysis-state | analysis state | mutations only |
+| `derived-computation` | derived | revscope-computation | evidence set | reads |
+| `unverified-assertion` | inferred | analyst-assertion | artifact or analysis state | reads (must state its basis) |
+
+Capabilities declare only a result kind; a capability has no way to choose
+confidence or authority. `createEvidence` takes no labels at all and computes
+them from the kind. `parseEvidence` rejects any record whose labels differ
+from the table, even if its identifier was recomputed. As a consequence:
+
+- Decompiler output is `engine-interpretation`, which is never `observed` and
+  never speaks for the original artifact.
+- A mutation acknowledgement only describes analysis state, and only mutating
+  capabilities may produce one. Reads may not.
+
+### Integrity is not authenticity
+
+The evidence identifier is an **unkeyed** SHA-256 of the record's canonical
+JSON, labels included. It detects accidental or partial modification: a record
+whose content no longer matches its identifier is rejected. It does **not**
+prove who produced a record. Anyone can edit a record and recompute a matching
+identifier. Records loaded from files, such as the inputs to
+`report-evidence` and `compare-evidence`, are therefore consistent but
+**unauthenticated**. Label rules still apply to them, so an edited record
+cannot carry contradictory labels. A future milestone may add signatures or a
+provenance chain.
+
+## Mutation-aware session
+
+`AnalysisSession` (`src/application/session.ts`) only trusts what it has
+verified against a provider **state token**. A state token is an opaque
+string that the provider must change whenever its analysis state changes.
+
+- **Opening.** `AnalysisSession.open` checks every capability declaration,
+  then calls `observeState()` to obtain the initial verified token. If that
+  fails, the session does not open.
+- **Reads** return the token they were made against. Cache entries are bound
+  to the revision and token at which they were recorded. While the session is
+  consistent, a read whose token differs from the verified one means the state
+  changed outside the session; the session becomes uncertain.
+- **Mutations** make the session uncertain *before* the provider is called.
+  `state()` reports `mutation_in_progress`, and `snapshot()` refuses, until
+  the provider replies.
+
+| Mutation outcome | Possibly mutated | Session afterwards | Snapshot |
+|---|---|---|---|
+| Applied, with a valid new token | yes (known) | consistent at the new token; cache cleared | allowed |
+| Rejected, token unchanged | no (verified) | consistent; earlier cache kept | allowed |
+| Rejected, but token changed | unknown | **uncertain** | **refused** |
+| Partial (some items applied) | yes | **uncertain** | **refused** |
+| Provider exception, or missing/invalid token | unknown | **uncertain** | **refused** |
+
+While the session is uncertain:
+
+- Reads go to the provider. They are not cached and carry a `session-state`
+  unknown (`stateVerified: false`).
+- Mutations are refused with `state_uncertain`.
+- Snapshot export is refused with `state_uncertain`.
+- **No ordinary read restores consistency**, not even one that lists every
+  item.
+
+Consistency returns only through `reconcile()`. It calls the provider's
+`observeState()`, adopts the fresh token, starts a new revision and clears the
+cache. If the observation fails, throws, or returns an invalid token, the
+session stays uncertain.
+
+Reads, mutations and reconciliation run one at a time in call order.
+`state()` and `snapshot()` are synchronous and never wait. Providers must not
+call back into the session that owns them; such a call would queue behind the
+operation that made it.
+
+**Trust assumptions:** the session assumes it is the only writer of the
+provider's state. A change made outside the session is detected on the next
+provider round trip; a cached read is not re-checked until then. The token
+contract is the provider's responsibility. A provider that returns the same
+token for different states defeats detection.
+
+## Environment policy and child processes
+
+`buildChildEnvironment` (`src/infrastructure/envPolicy.ts`) builds a child's
+environment from three explicit sources:
+
+- a **baseline** allowlist: `PATH`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`;
+- a deliberate **passthrough** list of names;
+- explicit **set** values.
+
+Nothing else reaches the child. The manifest records only names (approved,
+inherited, absent, set), never values.
+
+`runChild` (`src/infrastructure/childProcess.ts`) is the only code that
+starts processes. It runs the child without a shell: an absolute executable
+path, an argument vector, NUL bytes rejected.
+
+**Lifecycle on POSIX (verified on macOS):**
+
+- The child leads a new process group. On deadline or cancellation (an
+  `AbortSignal`), the whole group receives SIGTERM, then SIGKILL after
+  `killGraceMs` (default 500 ms).
+- Only that group is ever signalled.
+- After the child exits, remaining output is collected for at most `drainMs`
+  (default 250 ms). After that, descendants that still hold the pipes are
+  killed and the streams are closed.
+- When the run ends, any remaining group member is killed, including a
+  descendant that closed its output. The run then waits up to 500 ms for the
+  group to disappear.
+
+**Result:** `termination` (`exited`, `timed-out` or `cancelled`), the exit
+code and signal, and `cleanup.status` (`not-needed`, `terminated` or
+`failed`, with a reason).
+
+**Timing bound:** a run returns no later than about
+`timeoutMs + killGraceMs + drainMs + 250 ms + 500 ms` (about `timeoutMs` +
+1.5 s with the defaults). In the lifecycle tests, a 300 ms deadline with a
+lingering grandchild returned in about 300–350 ms.
+
+**Windows:** only the direct child is signalled (`cleanup.scope:
+"direct-child-only"`), and descendants are not tracked. This is unverified.
+
+No tool in this milestone launches external programs. The lifecycle is tested
+with the Node.js runtime running test-owned scripts.
+
+## MCP implementation
+
+The MCP layer is a small hand-written JSON-RPC server
+(`src/interfaces/mcp.ts`), not an SDK server. Doing it this way lets input
+validation failures use Revscope's own envelope. Tool schemas are generated
+from the same zod schemas as draft-07 JSON Schema with an object root.
+
+Compatibility is checked with the official MCP SDK client, a dev-only
+dependency, in `tests/e2e/mcpSdk.test.ts`. That client validates every
+`structuredContent` value against the advertised `outputSchema`.
+
+See [decisions/](decisions/) for the reasoning behind each choice.

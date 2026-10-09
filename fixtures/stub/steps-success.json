@@ -1,0 +1,8 @@
+[
+  { "action": "read", "operation": "get_name", "params": { "address": "0x1000" } },
+  { "action": "read", "operation": "decompile", "params": { "address": "0x1000" } },
+  { "action": "read", "operation": "get_name", "params": { "address": "0x1000" } },
+  { "action": "mutate", "operation": "rename", "params": { "names": { "0x1000": "entry" } } },
+  { "action": "read", "operation": "get_name", "params": { "address": "0x1000" } },
+  { "action": "snapshot" }
+]
