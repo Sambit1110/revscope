@@ -18,11 +18,25 @@ const sourceFiles = async (directory: string): Promise<string[]> => {
   return nested.flat();
 };
 
-/** Static import and export specifiers, including type-only ones. */
+/** Every way a module can name a dependency with a literal specifier. */
+const DEPENDENCY_PATTERNS: readonly RegExp[] = [
+  // import x from "m"; import type { T } from "m"; export * from "m"; export { x } from "m"
+  /(?:^|[\n;])\s*(?:import|export)\s[^;]*?\bfrom\s*["']([^"']+)["']/gu,
+  // import "m"; (side effects only)
+  /(?:^|[\n;])\s*import\s*["']([^"']+)["']/gu,
+  // await import("m")
+  /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu,
+  // require("m"), including through createRequire
+  /\brequire\s*\(\s*["']([^"']+)["']\s*\)/gu,
+];
+
+/** Dynamic imports or requires whose target is not a literal cannot be checked. */
+const UNANALYZABLE = /\b(?:import|require)\s*\(\s*(?!["'][^"']+["']\s*\))[^)]/gu;
+
 const specifiers = (source: string): string[] =>
-  [...source.matchAll(/(?:^|\n)\s*(?:import|export)\s[^;]*?from\s+"([^"]+)"/gu)].map(
-    (match) => match[1] ?? "",
-  );
+  DEPENDENCY_PATTERNS.flatMap((pattern) => [...source.matchAll(pattern)].map((match) => match[1] ?? ""));
+
+const unanalyzable = (source: string): number => [...source.matchAll(UNANALYZABLE)].length;
 
 const layerOf = (file: string): string => relative(SRC, file).split("/")[0] ?? "";
 
@@ -53,6 +67,7 @@ describe("module boundaries", () => {
     for (const file of await sourceFiles(SRC)) {
       const layer = layerOf(file);
       const source = await readFile(file, "utf8");
+      if (unanalyzable(source) > 0) violations.push(`${relative(REPO_ROOT, file)} (non-literal import or require)`);
       for (const specifier of specifiers(source)) {
         if (specifier.startsWith(".")) {
           const target = relative(SRC, join(file, "..", specifier)).split("/")[0] ?? "";
@@ -64,6 +79,28 @@ describe("module boundaries", () => {
       }
     }
     expect(violations).toEqual([]);
+  });
+
+  it.each([
+    ['import x from "node:fs";', ["node:fs"]],
+    ["import x from 'node:fs';", ["node:fs"]],
+    ['import type { A } from "../interfaces/cli.js";', ["../interfaces/cli.js"]],
+    ['export * from "node:fs";', ["node:fs"]],
+    ['export { a } from "./a.js";', ["./a.js"]],
+    ['import "node:fs";', ["node:fs"]],
+    ['const fs = await import("node:fs");', ["node:fs"]],
+    ['const r = require("node:fs");', ["node:fs"]],
+    ['import {\n  a,\n  b,\n} from "./multi.js";', ["./multi.js"]],
+  ])("detects the dependency in %s", (source, expected) => {
+    expect(specifiers(source)).toEqual(expected);
+  });
+
+  it("flags imports and requires whose target it cannot read", () => {
+    expect(unanalyzable("const m = await import(name);")).toBe(1);
+    expect(unanalyzable("const r = require(`node:${x}`);")).toBe(1);
+    expect(unanalyzable('const m = await import("node:fs");')).toBe(0);
+    // Not calls: a property or word that merely contains the name.
+    expect(unanalyzable("const imported = 1; obj.required(1);")).toBe(0);
   });
 
   it("finds imports in every source file it checks", async () => {
