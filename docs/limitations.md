@@ -50,8 +50,20 @@
   JavaScript cannot hold such a key as ordinary data through validation.
 - **MCP lines are limited to 4 MiB.** A longer line is discarded without
   being buffered and answered with a `resource_limit` error.
-- **Symbolic links are not followed** by `inspect-artifact`; the caller must
-  select the target file directly.
+- **File opening.** Artifacts and JSON inputs are opened first and checked
+  afterwards, on the opened descriptor, so a file swapped for a link, FIFO or
+  device between check and use is still refused. Opening never blocks on a
+  FIFO.
+  - **Symbolic links** as the final path component are refused
+    (`O_NOFOLLOW`); the caller must select the target file directly.
+    **Symbolic links in parent directories are followed.**
+  - On Windows, where `O_NOFOLLOW` does not exist, the path is checked with
+    `lstat` and the opened file must have the same device and inode. This
+    fallback has not been run on Windows.
+  - This defends against swaps of the final component only. It is not a
+    sandbox: Revscope reads any regular file the current user can read.
+- **JSON inputs must be valid UTF-8.** Invalid bytes are refused instead of
+  being replaced.
 - **Comparison pairs records** by subject, operation and canonical
   parameters:
   - Analysis-state subjects are compared by artifact digest, ignoring the
