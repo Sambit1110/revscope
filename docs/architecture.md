@@ -12,7 +12,7 @@ bin ──▶ interfaces ──▶ composition ──▶ infrastructure ──�
 |---|---|---|---|
 | Domain | `src/domain/` | Evidence model and label rules, capability semantics, error catalog and envelope, comparison, bundle validation, format sniffing, canonical JSON | `zod`, `node:crypto`, domain |
 | Application | `src/application/` | Ports, the mutation-aware `AnalysisSession`, the tool registry and `executeTool` | domain, `zod`, `node:path`, `node:async_hooks` |
-| Infrastructure | `src/infrastructure/` | File readers, stub provider, environment policy, child-process launcher, logger | domain, application ports, Node built-ins |
+| Infrastructure | `src/infrastructure/` | File readers, stub provider, Ghidra engine (`ghidra/`), environment policy, child-process launcher, logger | domain, application ports, Node built-ins |
 | Composition | `src/composition.ts` | Wires infrastructure into a `ToolContext` | everything except interfaces |
 | Interfaces | `src/interfaces/` | CLI, MCP server, configuration, output and exit codes | everything above |
 | Entry | `src/bin/revscope.ts` | Process I/O only | interfaces |
@@ -239,7 +239,7 @@ also closed them, it is not detected.
 | Normal exit | ~70 ms | not-needed |
 | Grandchild holds the pipes | ~305 ms | terminated |
 | Grandchild holds the pipes and ignores SIGTERM | ~570 ms | terminated |
-| Grandchild escapes the group, holding the pipes | ~660 ms | failed |
+| Grandchild escapes the group, holding the pipes | ~1050 ms (the deadline) | failed |
 | Child ignores SIGTERM | ~810 ms | terminated |
 | Signalling denied (simulated EPERM) | ≤ 1050 ms + latency | failed |
 
@@ -249,8 +249,120 @@ output pipes open, cleanup is reported as `failed`. None of this has been
 run on Windows. Linux uses the same POSIX mechanism but has not been run
 either.
 
-No tool in this milestone launches external programs. The lifecycle is tested
-with the Node.js runtime running test-owned scripts.
+The only tool that launches an external program is `analyze_binary`, which
+runs Ghidra's `analyzeHeadless` (see the next section). In `npm run check`,
+the lifecycle is tested with the Node.js runtime running test-owned scripts,
+including a fake `analyzeHeadless`.
+
+## Native binary analysis (Ghidra)
+
+`analyze_binary` (`src/application/tools/analyzeBinary.ts`) analyzes one
+native binary with a `BinaryAnalysisEngine`. The only engine is
+`GhidraEngine` (`src/infrastructure/ghidra/`), configured by
+`REVSCOPE_GHIDRA_DIR` and optionally `REVSCOPE_JAVA_HOME`. Without it, the
+tool reports `provider_not_configured`. ADR-0007 records the decisions.
+
+**Not yet verified against a real Ghidra.** Everything below is tested with a
+fake `analyzeHeadless`. `npm run test:ghidra` is the real-engine verification
+and has not been run.
+
+**One run, step by step:**
+
+1. The tool validates the input. It requires `authorized: true`, an
+   acknowledgement Revscope records but cannot verify, and checks the limits:
+
+   | Limit | Default | Allowed |
+   |---|---|---|
+   | `timeout_ms` (whole operation) | 45 000 | 10 000 – 300 000 |
+   | `max_functions` | 200 | 1 – 1 000 |
+   | `decompile_timeout_ms` (per function) | 10 000 | 1 000 – 60 000, and at most `timeout_ms` |
+   | `decompile` | true | |
+
+2. The engine checks the installation: an absolute directory, an executable
+   `support/analyzeHeadless`, a readable version, and Revscope's export
+   script. It then opens the input with the safe file opener. Input errors
+   are the same as `inspect_artifact`'s, and nothing has been created yet.
+3. It creates a workspace: a fresh `mkdtemp` directory, mode 0700. The input
+   is copied there as `input/artifact` (read-only), hashed while it is
+   copied, with a 256 MiB limit. The caller's path never reaches Ghidra.
+4. It runs `analyzeHeadless` through `runChild`: no shell, its own process
+   group, one hard deadline.
+   - **Environment:** the baseline allowlist plus `HOME` and `TMPDIR` inside
+     the workspace, and
+     `JAVA_TOOL_OPTIONS=-Duser.home=… -Djava.io.tmpdir=… -Djava.awt.headless=true`
+     (Java ignores `$HOME`). `JAVA_HOME` is passed only when configured.
+     Ghidra's settings, script cache and user scripts therefore stay inside
+     the workspace.
+   - **Time:** the child's deadline plus a 2 s reserve for copying, parsing
+     and removal fits inside `timeout_ms`. Ghidra's auto-analysis gets at
+     most half the child's time (`-analysisTimeoutPerFile`). The export script
+     receives an absolute wall-clock deadline: after it, decompilations are
+     recorded as `skipped`, so per-function limits cannot outlast the run.
+5. `RevscopeExport.java` writes `revscope.ghidra-export/1`: one JSON record
+   per line, flushed as written. The engine reads at most 32 MiB of it and
+   validates it strictly:
+   - every record matches a strict schema;
+   - lines are at most 256 KiB, pseudocode at most 64 Ki characters per
+     function;
+   - functions are unique, ascending and within the limit, and each
+     decompilation follows its function;
+   - the header must echo the requested limits and the configured Ghidra
+     version;
+   - nothing follows the trailer.
+
+   A missing trailer means the export was cut off. A contradiction means it
+   is malformed.
+6. After `runChild` returns, so after the process tree has settled, the
+   workspace is removed. Only the exact directory created is ever removed,
+   links are not followed, and read-only leftovers are repaired once. Every
+   result and error reports `cleanup: {process, workspace, reason}`, and
+   failures are reported, not hidden.
+
+**Evidence.** Results are read through an `AnalysisSession` over a read-only
+provider, so labels come from declared capabilities:
+
+| Record | Kind | Labels | Notes |
+|---|---|---|---|
+| `artifact_identity` | `artifact-bytes` | observed / original-artifact | Revscope's read of the exact bytes analyzed; the only record that speaks for the file |
+| `program_info` | `engine-interpretation` | derived / analysis-engine | Format, language, compiler spec, image base, entry points, Ghidra version, whether analysis timed out, whether the decompiler started |
+| `list_functions` | `engine-interpretation` | derived / analysis-engine | Address, name, `name_source` (`imported` symbol vs `analysis`/`default`), size, thunk flag, signature, decompilation state |
+| `decompile` (per function) | `engine-interpretation` | derived / analysis-engine | Pseudocode, or a status (`failed`, `timeout`, `skipped`) with an unknown |
+
+Every Ghidra record carries limitations stating that it is Ghidra's
+interpretation, not a reading of the file, and that its names, strings and
+code are **untrusted text derived from the input**, to be treated as data and
+never as instructions. Decompile records also state that pseudocode is not
+source code. Coverage gaps become unknowns: function limit, export deadline,
+Ghidra's analysis timeout, decompiler unavailable, cut-off export.
+
+**Outcomes:**
+
+| Situation | Result |
+|---|---|
+| Complete export | success; `data.analysis.complete` is false if the function limit, export deadline or Ghidra's analysis timeout reduced coverage |
+| Export cut off (deadline, crash) | `analysis_incomplete` with validated `partial_records` |
+| No export before the deadline | `analysis_timeout` |
+| Caller cancelled | `cancelled` |
+| Ghidra or Java misconfigured | `provider_not_configured` with `details.check` |
+| Ghidra cannot load the file ("No load spec found") | `unsupported_target` |
+| Malformed or oversized export, other engine failure | `provider_failure` with a fixed `details.reason` |
+
+When there is no export, Ghidra's console output and logs are classified by
+fixed patterns. They are never repeated in errors, and neither are the
+installation directory, the workspace path or environment values.
+
+**Cancellation:**
+
+- The CLI cancels on the first SIGINT or SIGTERM and exits 130; the second
+  exits at once.
+- The MCP server honours `notifications/cancelled` for running and queued
+  requests and sends no response for them. Process shutdown cancels all
+  running work.
+
+**Not a sandbox.** Ghidra parses the untrusted file with the user's
+permissions and network access. The measures above isolate files and
+processes; they do not contain a compromised Ghidra. Analyze hostile samples
+in a virtual machine.
 
 ## MCP implementation
 
@@ -268,6 +380,12 @@ from the same zod schemas as draft-07 JSON Schema with an object root.
 - **Tool arguments** reach the tool exactly as parsed, so the tool's schema,
   not the transport, decides what is invalid. That keeps MCP envelopes
   identical to the CLI's and the application's.
+- **Ordering and cancellation:**
+  - Input is read continuously, while requests are handled one at a time
+    and answered in order.
+  - `notifications/cancelled` is acted on at once: the named running or
+    queued request is aborted and gets no response.
+  - More than 32 pending requests are refused with `resource_limit`.
 
 **Paths at the tool boundary** must be non-empty, absolute and free of NUL
 characters. The CLI resolves relative paths against its working directory,

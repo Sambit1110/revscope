@@ -12,6 +12,18 @@ All versions are pinned exactly in `package.json` and locked in
 `zod` is the only production dependency; the production tree contains no
 transitive packages.
 
+## External requirements (not npm packages)
+
+Only `analyze_binary` needs these; everything else works without them. They
+are found through configuration and never bundled or downloaded by Revscope.
+
+| Requirement | Licence | Purpose | Configured by |
+|---|---|---|---|
+| Ghidra (planned against 12.1.4) | Apache-2.0 | Headless analysis and decompilation | `REVSCOPE_GHIDRA_DIR` |
+| JDK 21 or newer, 64-bit (Ghidra 12.1.4 declares a minimum of 21, no maximum) | per vendor (e.g. Eclipse Temurin: GPLv2 with Classpath Exception) | Runs Ghidra and compiles the export script | `REVSCOPE_JAVA_HOME`, or Ghidra's own JDK discovery |
+
+Phase 4 added no npm dependencies.
+
 ## Development only
 
 | Package | Version | Licence | Purpose |

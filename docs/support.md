@@ -14,4 +14,7 @@ a verification run is labelled **unverified**.
 | Provider | Status |
 |---|---|
 | Stub provider (fixtures) | Verified by the deterministic test suite |
-| Real binary-analysis providers | Not implemented |
+| Ghidra integration against a fake `analyzeHeadless` | Verified by `npm run check` (process lifecycle, export validation, labels, errors, cleanup, CLI/MCP equivalence) |
+| Ghidra 12.1.4 (or any real Ghidra) | **Unverified.** Checked against published sources only; `npm run test:ghidra` has not been run |
+| Ghidra on macOS arm64 | **Unverified.** Needs locally built natives for decompilation |
+| Ghidra on Linux / Windows | Unverified |

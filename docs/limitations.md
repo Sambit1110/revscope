@@ -1,16 +1,41 @@
-# Limitations of the foundation milestone
+# Limitations
 
 ## Scope
 
-- **No real analysis provider.** The only provider is a deterministic stub
-  loaded from fixture JSON. Its "decompile" output is fixture text. Revscope
-  cannot yet disassemble, decompile or otherwise analyze real binaries.
+- **The Ghidra provider is unverified against a real Ghidra.** `analyze_binary`
+  is implemented and tested end to end against a fake `analyzeHeadless`.
+  The export script has been checked against Ghidra 12.1.4's published
+  sources but never compiled or run. `npm run test:ghidra` is the
+  verification step and has not been run. Until it passes, real-engine
+  compatibility, determinism, timing and the failure classification are
+  unverified.
+- **Ghidra is not a sandbox.** It parses the untrusted file with the user's
+  permissions and network access. Revscope isolates its files, environment
+  and processes and bounds its time and output, but does not contain it.
+  Analyze hostile samples in a virtual machine.
+- **Authorization is an acknowledgement.** `analyze_binary` requires
+  `authorized: true` (`--authorized`). Revscope records it and cannot verify
+  that the caller may analyze the file.
+- **Ghidra coverage is partial:**
+  - Only functions in the default address space are exported.
+  - At most 1 000 functions.
+  - Pseudocode is truncated at 64 Ki characters per function.
+  - Failures without an export are classified from Ghidra's output by fixed
+    patterns; an unrecognised message becomes a generic `provider_failure`.
+- **macOS arm64 needs Ghidra's native decompiler built locally.** Ghidra
+  12.1.4 ships no prebuilt natives for macOS. Without them, analysis runs
+  but every decompilation is reported unavailable.
+- **One JVM per call.** Each analysis pays Java start-up and import time.
+  Some MCP clients cut off tool calls after about 60 s; the default 45 s
+  timeout is set below that, and larger binaries may need more.
+- **The stub provider remains.** `stub_analysis` still serves fixture data,
+  and its "decompile" output is fixture text.
 - **Format detection is a suggestion.** `artifact_format` looks only at the
   leading magic bytes and is labelled `inferred`. It does not parse or
   validate the file. Some signatures are ambiguous: `cafebabe` is reported as
   "Mach-O universal or Java class".
-- **No tool launches external programs yet.** The environment policy and
-  `runChild` are implemented and tested, but no tool uses them.
+- **Only `analyze_binary` launches an external program** (Ghidra), through the
+  environment policy and `runChild`.
 - **Process-tree termination is POSIX-only.** It relies on process groups:
   - A descendant that leaves the group (for example with `setsid`) is not
     terminated. It is reported as a cleanup failure only while it holds the
@@ -35,8 +60,9 @@
 ## Interfaces
 
 - **MCP coverage is minimal.** The server implements `initialize`, `ping`,
-  `tools/list` and `tools/call` over stdio. It has no resources, prompts,
-  progress notifications, cancellation, HTTP transport, or authentication.
+  `tools/list`, `tools/call` and `notifications/cancelled` over stdio. It has
+  no resources, prompts, progress notifications, HTTP transport, or
+  authentication.
 - **CLI output is always JSON.** There is no human-oriented formatting.
 
 ## Inputs and resources
