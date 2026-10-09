@@ -85,8 +85,6 @@ const defaultControl: ProcessControl = {
 
 /** Poll interval while waiting for the tree to disappear and the pipes to close. */
 const SETTLE_POLL_MS = 10;
-/** After the group is gone, how long to wait for the kernel to close its pipes. */
-const PIPE_CLOSE_GRACE_MS = 100;
 
 const errorCode = (cause: unknown): string =>
   typeof cause === "object" && cause !== null && "code" in cause ? String(cause.code) : "";
@@ -275,17 +273,17 @@ export const runChild = async (
 
     /** Kill whatever is left, then wait for the tree and its pipes to go, never past the deadline. */
     const settle = async (): Promise<void> => {
-      let goneAt: number | null = null;
       // At least one pass, even when settling starts at the deadline itself.
       // The deadline timer may resolve the run while this loop waits.
       for (;;) {
         if (resolved) return;
         // Re-signal on every pass: a member forked during the previous SIGKILL is caught too.
         if (treeAlive()) signalTree("SIGKILL");
-        else {
-          goneAt ??= performance.now();
-          if (closed || performance.now() - goneAt >= PIPE_CLOSE_GRACE_MS) return;
-        }
+        // Once the tree is gone, wait for the pipes to close. Under load their
+        // close can be observed well after the processes die, so there is no
+        // short grace: only a pipe still open at the deadline counts as held
+        // by an escaped descendant.
+        else if (closed) return;
         if (performance.now() >= deadlineAt) return;
         await delay(SETTLE_POLL_MS);
       }

@@ -30,8 +30,12 @@ It also had no cancellation.
 - **Nothing in the group outlives the run.** Settling re-sends SIGKILL until
   the group is gone, then waits for the pipes to close, up to the deadline.
 - **Escapes are reported, not hidden.** If the group is gone but the pipes
-  are still held open, a descendant left the group. It is not signalled, and
-  cleanup is reported as `failed` instead of `terminated`.
+  are still held open at the deadline, a descendant left the group. It is not
+  signalled, and cleanup is reported as `failed` instead of `terminated`.
+  Revscope waits until the deadline, not a short grace period, before
+  concluding this: under load, the pipes of a cleanly terminated group can be
+  observed closing well after its processes die. A 100 ms grace produced
+  false `failed` reports in a loaded test run.
 - **The result says what happened.** It reports why the run ended (`exited`,
   `timed-out` or `cancelled`) separately from cleanup (`not-needed`,
   `terminated` or `failed`, with a reason).
