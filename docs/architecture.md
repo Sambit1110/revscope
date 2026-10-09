@@ -262,9 +262,10 @@ native binary with a `BinaryAnalysisEngine`. The only engine is
 `REVSCOPE_GHIDRA_DIR` and optionally `REVSCOPE_JAVA_HOME`. Without it, the
 tool reports `provider_not_configured`. ADR-0007 records the decisions.
 
-**Not yet verified against a real Ghidra.** Everything below is tested with a
-fake `analyzeHeadless`. `npm run test:ghidra` is the real-engine verification
-and has not been run.
+**Verification.** Everything below is tested with a fake `analyzeHeadless`
+in `npm run check`. It was verified against a real Ghidra with
+`npm run test:ghidra` (9/9) on one environment only: Ghidra 12.1.4 with locally built macOS arm64 natives, Temurin JDK 25.0.2, Node.js 26.9.0, macOS 27.0.1 arm64.
+ADR-0007 lists what that covers and what remains unverified.
 
 **One run, step by step:**
 
@@ -288,11 +289,13 @@ and has not been run.
 4. It runs `analyzeHeadless` through `runChild`: no shell, its own process
    group, one hard deadline.
    - **Environment:** the baseline allowlist plus `HOME` and `TMPDIR` inside
-     the workspace, and
-     `JAVA_TOOL_OPTIONS=-Duser.home=… -Djava.io.tmpdir=… -Djava.awt.headless=true`
-     (Java ignores `$HOME`). `JAVA_HOME` is passed only when configured.
-     Ghidra's settings, script cache and user scripts therefore stay inside
-     the workspace.
+     the workspace, and `JAVA_TOOL_OPTIONS` with `-Duser.home`,
+     `-Djava.io.tmpdir`, Ghidra's `-Dapplication.settingsdir`,
+     `-Dapplication.cachedir` and `-Dapplication.tempdir`, all inside the
+     workspace, and `-Djava.awt.headless=true`. Java ignores `$HOME`, and
+     without `application.cachedir` Ghidra caches in `/var/tmp/<user>-ghidra`.
+     `JAVA_HOME` is passed only when configured. Ghidra's settings, cache,
+     script cache and user scripts therefore stay inside the workspace.
    - **Time:** the child's deadline plus a 2 s reserve for copying, parsing
      and removal fits inside `timeout_ms`. Ghidra's auto-analysis gets at
      most half the child's time (`-analysisTimeoutPerFile`). The export script
@@ -358,6 +361,19 @@ installation directory, the workspace path or environment values.
 - The MCP server honours `notifications/cancelled` for running and queued
   requests and sends no response for them. Process shutdown cancels all
   running work.
+
+**Opt-in diagnostics.** `REVSCOPE_GHIDRA_DIAGNOSTICS=1` keeps a failed or
+incomplete run for local diagnosis:
+
+- the whole workspace, with Ghidra's `application.log` and `script.log`, is
+  moved into a new 0700 directory under `<tmpdir>/revscope-diagnostics/`;
+- `run.json` records the outcome, internal classification, exit status,
+  signal, timings, command line and environment variable names only;
+- `stdout.txt` and `stderr.txt` hold the console output.
+
+The location is printed to the local stderr only. Tool results show
+`cleanup.workspace: "preserved"` and never a path or log text. It is off by
+default, and successful runs are always cleaned up.
 
 **Not a sandbox.** Ghidra parses the untrusted file with the user's
 permissions and network access. The measures above isolate files and

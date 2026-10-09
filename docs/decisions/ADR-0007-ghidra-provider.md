@@ -1,8 +1,7 @@
 # ADR-0007: Ghidra headless as the first real analysis engine
 
-**Status:** accepted for Phase 4. The integration is complete and tested
-against a fake engine. **It has not yet been verified against a real Ghidra
-installation**; see "Verification" below.
+**Status:** accepted for Phase 4. Verified against a real Ghidra in Phase 4.1
+on one environment only (Ghidra 12.1.4 with locally built macOS arm64 natives, Temurin JDK 25.0.2, Node.js 26.9.0, macOS 27.0.1 arm64); see "Verification" below.
 
 ## Context
 
@@ -43,8 +42,13 @@ interface (`support/analyzeHeadless`) with post-analysis scripts.
   copied bytes is `observed` / `original-artifact`.
 - **Isolation, not sandboxing.**
   - The input is copied into a fresh 0700 workspace under a neutral name.
-  - Ghidra's home, settings, script cache and temporary files are redirected
-    into the workspace (`JAVA_TOOL_OPTIONS`, `HOME`, `TMPDIR`).
+  - Ghidra's home, settings, cache, script cache and temporary files are
+    redirected into the workspace (`JAVA_TOOL_OPTIONS` with `user.home`,
+    `java.io.tmpdir` and Ghidra's own `application.settingsdir`,
+    `application.cachedir` and `application.tempdir`; `HOME`, `TMPDIR`).
+    Without `application.cachedir`, Ghidra puts its packed-database cache in
+    `/var/tmp/<user>-ghidra`, outside the workspace; Phase 4.1 found and
+    fixed this.
   - The environment is allowlisted.
   - Ghidra runs in its own process group with one hard deadline.
   - The workspace is removed after the process tree has settled.
@@ -74,23 +78,51 @@ interface (`support/analyzeHeadless`) with post-analysis scripts.
   be built for the installation. Without it, the export reports the
   decompiler as unavailable.
 - Failures without an export are classified from Ghidra's output by fixed
-  patterns. The text is never reported, so diagnosis needs the patterns to
-  match. The patterns follow Ghidra's documented messages and are unverified.
+  patterns. The text is never reported to callers. For diagnosis,
+  `REVSCOPE_GHIDRA_DIAGNOSTICS=1` keeps a failed run's workspace, logs and a
+  run record locally (Phase 4.1).
 - Functions outside the default address space (overlays, separate code
   spaces) are not exported.
 
 ## Verification
 
-Checked against Ghidra 12.1.4's published sources and documentation
-(2026-10-10). None of it has been run:
+**Phase 4 (2026-10-10), from published sources only:**
 
 - `application.java.min=21`, no maximum;
 - the `analyzeHeadless` options used;
-- post-scripts still run after `-analysisTimeoutPerFile` fires;
-- `HeadlessScript.analysisTimeoutOccurred()`,
-  `DecompileResults.decompileCompleted/isTimedOut/getDecompiledFunction`,
-  and `TaskMonitor.isCancelled()` exist.
+- post-scripts run after `-analysisTimeoutPerFile`;
+- the `HeadlessScript`, `DecompileResults` and `TaskMonitor` methods used.
 
-`npm run test:ghidra` is the verification step. Until it passes against an
-installed Ghidra, real-engine compatibility, determinism and the failure
-classification patterns are unverified.
+**Phase 4.1 (2026-10-10), real engine:** `npm run test:ghidra` passed 9/9,
+twice, on Ghidra 12.1.4 with locally built macOS arm64 natives, Temurin JDK 25.0.2, Node.js 26.9.0, macOS 27.0.1 arm64.
+
+The first real run failed. The export script called
+`LanguageID.getIdString()`, which does not exist in 12.1.4 (the accessor is
+`getIdAsString()`), so Ghidra skipped it and every analysis ended in
+`export_script_failed`. The source check had missed that call. The suite
+now compiles the script with `javac` against the installation's own jars
+first.
+
+Verified on that environment:
+
+- the script compiles;
+- import, analysis and export of the ELF fixture (names from the symbol
+  table, pseudocode `return 0x2a;` and `return param_1 * 2;`);
+- labels;
+- identical evidence across two runs of the fixture;
+- `unsupported_target` for a text file and for noise ("No load spec found");
+- a real timeout and a real cancellation, with Ghidra stopped and the
+  workspace removed;
+- `java_home_invalid`;
+- the cache staying out of `/var/tmp`;
+- identical CLI and MCP output;
+- JDK 25 running Ghidra 12.1.4.
+
+**Still unverified:**
+
+- other Ghidra versions, Linux and Windows;
+- binaries other than the 592-byte fixture: real-world size, timing, and
+  determinism beyond it;
+- the `java_runtime`, `import_failed` and `export_script_failed`
+  classification patterns, beyond the one compile failure observed;
+- Ghidra without built natives on macOS (decompiler unavailable).

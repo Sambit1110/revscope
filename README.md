@@ -8,8 +8,9 @@ small CLI and MCP interface over them.
 > **Status:** Revscope reads file metadata, runs a deterministic **stub**
 > provider from fixture files, and has a **Ghidra** provider
 > (`analyze-binary`) for real native binaries. The Ghidra integration is
-> tested against a fake engine but **has not yet been verified against a real
-> Ghidra installation**. See [Real-engine tests](#real-engine-tests).
+> verified against Ghidra 12.1.4 on one machine (macOS arm64, JDK 25) with a
+> small ELF fixture; other platforms and real-world binaries are not yet
+> verified. See [Real-engine tests](#real-engine-tests).
 
 ## Requirements
 
@@ -216,7 +217,26 @@ They analyze a generated 592-byte x86-64 ELF fixture
 
 Without `REVSCOPE_GHIDRA_DIR` every one of them **fails** instead of being
 skipped, so a missing engine never looks like a verified one. Only a passing
-`npm run test:ghidra` verifies the real engine.
+`npm run test:ghidra` verifies the real engine. The suite also compiles the
+export script with `javac` against the installation's jars, so an API
+mismatch fails with the compiler's message.
+
+### Diagnosing a failed analysis
+
+Errors deliberately contain no Ghidra output. To see why a run failed, enable
+local diagnostics:
+
+```bash
+REVSCOPE_GHIDRA_DIAGNOSTICS=1 REVSCOPE_GHIDRA_DIR=/absolute/path/to/ghidra_12.1.4_PUBLIC \
+  node dist/bin/revscope.js analyze-binary ./program --authorized
+```
+
+A failed or incomplete run's workspace (including Ghidra's
+`logs/application.log`), a `run.json` record (exit status, internal
+classification, command line, environment variable names) and its console
+output are kept under `<tmpdir>/revscope-diagnostics/`. The location is
+printed on stderr. The tool's output itself still contains no paths or
+logs. This also works with `npm run test:ghidra`.
 
 ## Evidence records
 

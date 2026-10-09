@@ -2,13 +2,16 @@
 
 ## Scope
 
-- **The Ghidra provider is unverified against a real Ghidra.** `analyze_binary`
-  is implemented and tested end to end against a fake `analyzeHeadless`.
-  The export script has been checked against Ghidra 12.1.4's published
-  sources but never compiled or run. `npm run test:ghidra` is the
-  verification step and has not been run. Until it passes, real-engine
-  compatibility, determinism, timing and the failure classification are
-  unverified.
+- **The Ghidra provider is verified on one environment and one small
+  binary.** `npm run test:ghidra` passed 9/9 on Ghidra 12.1.4 with locally built macOS arm64 natives, Temurin JDK 25.0.2, Node.js 26.9.0, macOS 27.0.1 arm64, analyzing a
+  592-byte ELF fixture. Still unverified:
+  - other Ghidra versions, Linux and Windows;
+  - real-world binaries (size, timing, determinism);
+  - most of the failure classification patterns.
+- **Earlier runs may have left a Ghidra cache in `/var/tmp/<user>-ghidra`.**
+  Before Phase 4.1, Ghidra's packed-database cache went there. Current
+  versions keep it in the workspace. Revscope never deletes that directory;
+  remove it yourself if you no longer need it.
 - **Ghidra is not a sandbox.** It parses the untrusted file with the user's
   permissions and network access. Revscope isolates its files, environment
   and processes and bounds its time and output, but does not contain it.
