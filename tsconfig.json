@@ -18,5 +18,5 @@
     "resolveJsonModule": false,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts", "vitest.ghidra.config.ts"]
 }

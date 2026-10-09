@@ -17,6 +17,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "oxlint --deny-warnings src tests",
     "test": "npm run build && vitest run",
+    "test:ghidra": "npm run build && vitest run --config vitest.ghidra.config.ts",
     "check": "npm run typecheck && npm run lint && npm test"
   },
   "dependencies": {
