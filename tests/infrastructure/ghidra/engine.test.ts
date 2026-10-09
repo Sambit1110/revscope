@@ -148,7 +148,18 @@ describe.skipIf(!posix)("Ghidra engine with a fake analyzeHeadless", () => {
       expect(run.env.JAVA_HOME).toBeNull();
       expect(run.env.HOME).toBe(join(run.cwd, "home"));
       expect(run.env.TMPDIR).toBe(join(run.cwd, "tmp"));
-      expect(run.env.JAVA_TOOL_OPTIONS).toBe(`-Duser.home=${join(run.cwd, "home")} -Djava.io.tmpdir=${join(run.cwd, "tmp")} -Djava.awt.headless=true`);
+      // Ghidra's settings, cache and temp directories are all inside the workspace;
+      // without application.cachedir its cache would go to /var/tmp.
+      expect(run.env.JAVA_TOOL_OPTIONS).toBe(
+        [
+          `-Duser.home=${join(run.cwd, "home")}`,
+          `-Djava.io.tmpdir=${join(run.cwd, "tmp")}`,
+          `-Dapplication.settingsdir=${join(run.cwd, "home")}`,
+          `-Dapplication.cachedir=${join(run.cwd, "cache")}`,
+          `-Dapplication.tempdir=${join(run.cwd, "tmp")}`,
+          "-Djava.awt.headless=true",
+        ].join(" "),
+      );
     });
 
     it("passes JAVA_HOME only when it is configured", async () => {

@@ -31,6 +31,8 @@ export interface Workspace {
   readonly exportPath: string;
   readonly home: string;
   readonly tmp: string;
+  /** Ghidra's cache directory (its packed-database cache), which otherwise defaults to /var/tmp. */
+  readonly cache: string;
   readonly logs: string;
 }
 
@@ -57,6 +59,7 @@ export const createWorkspace = async (parent?: string): Promise<Result<Workspace
     exportPath: join(root, "out", "export.ndjson"),
     home: join(root, "home"),
     tmp: join(root, "tmp"),
+    cache: join(root, "cache"),
     logs: join(root, "logs"),
   };
   if (!PLAIN_PATH.test(root)) {
@@ -65,7 +68,7 @@ export const createWorkspace = async (parent?: string): Promise<Result<Workspace
   }
   try {
     await chmod(root, 0o700);
-    for (const directory of ["input", "project", "out", "home", "tmp", "logs"])
+    for (const directory of ["input", "project", "out", "home", "tmp", "cache", "logs"])
       await mkdir(join(root, directory), { mode: 0o700 });
   } catch {
     await removeWorkspace(workspace);

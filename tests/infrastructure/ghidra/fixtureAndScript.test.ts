@@ -83,7 +83,7 @@ describe("Revscope's Ghidra export script", () => {
     expect(text).toContain(`SCHEMA = "${GHIDRA_EXPORT_SCHEMA}"`);
     const plan = planHeadless({
       installation: { root: "/g", analyzeHeadless: "/g/support/analyzeHeadless", version: "11.4", javaHome: null },
-      workspace: { parent: "/t", root: "/t/w", input: "/t/w/input/artifact", project: "/t/w/project", exportPath: "/t/w/out/export.ndjson", home: "/t/w/home", tmp: "/t/w/tmp", logs: "/t/w/logs" },
+      workspace: { parent: "/t", root: "/t/w", input: "/t/w/input/artifact", project: "/t/w/project", exportPath: "/t/w/out/export.ndjson", home: "/t/w/home", tmp: "/t/w/tmp", cache: "/t/w/cache", logs: "/t/w/logs" },
       scriptDir: DEFAULT_SCRIPT_DIR,
       limits: { timeoutMs: 45_000, maxFunctions: 200, decompile: true, decompileTimeoutMs: 10_000 },
       deadlineAt: performance.now() + 45_000,

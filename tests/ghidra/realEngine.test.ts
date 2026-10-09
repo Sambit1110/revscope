@@ -9,7 +9,8 @@
  * like a verified one.
  */
 import { spawnSync } from "node:child_process";
-import { readdir, writeFile } from "node:fs/promises";
+import { readdir, stat, writeFile } from "node:fs/promises";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
@@ -57,6 +58,19 @@ const success = (output: ToolOutput) => {
 
 const byOperation = (records: readonly Evidence[], name: string) => records.filter(({ operation }) => operation.name === name);
 
+/** Every file under a directory, recursively, with size and modification time; empty when absent. */
+const snapshot = async (directory: string): Promise<Record<string, string>> => {
+  const entries: Record<string, string> = {};
+  const walk = async (path: string): Promise<void> => {
+    const stats = await stat(path).catch(() => null);
+    if (stats === null) return;
+    entries[path] = `${String(stats.size)}:${String(stats.mtimeMs)}`;
+    if (stats.isDirectory()) for (const name of await readdir(path)) await walk(join(path, name));
+  };
+  await walk(directory);
+  return entries;
+};
+
 /** All of the installation's jars, the classpath Ghidra compiles scripts against. */
 const ghidraJars = async (root: string): Promise<string[]> => {
   const jars: string[] = [];
@@ -87,6 +101,14 @@ describe("Ghidra real-engine verification", () => {
     );
     expect(compiled.stderr).toBe("");
     expect(compiled.status).toBe(0);
+  });
+
+  it("keeps Ghidra's cache out of its default location outside the workspace", async () => {
+    settings();
+    const defaultCache = `/var/tmp/${userInfo().username}-ghidra`;
+    const before = await snapshot(defaultCache);
+    success(await analyze(await fixture()));
+    expect(await snapshot(defaultCache)).toEqual(before);
   });
 
   it("analyzes the ELF fixture: metadata, named functions, and pseudocode, labelled as engine output", async () => {

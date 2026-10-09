@@ -90,12 +90,18 @@ export const planHeadless = (options: {
     "-scriptlog",
     `${workspace.logs}/script.log`,
   ];
-  // Java ignores $HOME for user.home, so Ghidra's settings, script cache and
-  // user scripts are redirected into the workspace through JAVA_TOOL_OPTIONS.
+  // Java ignores $HOME for user.home, so Ghidra's directories are redirected
+  // into the workspace through JAVA_TOOL_OPTIONS. Ghidra's documented
+  // overrides (support/launch.properties) are set explicitly: without
+  // application.cachedir its packed-database cache goes to
+  // /var/tmp/<user>-ghidra on macOS and Linux, outside the workspace.
   // Workspace paths contain no whitespace (see createWorkspace).
   const javaOptions = [
     `-Duser.home=${workspace.home}`,
     `-Djava.io.tmpdir=${workspace.tmp}`,
+    `-Dapplication.settingsdir=${workspace.home}`,
+    `-Dapplication.cachedir=${workspace.cache}`,
+    `-Dapplication.tempdir=${workspace.tmp}`,
     "-Djava.awt.headless=true",
   ].join(" ");
   const environment: EnvironmentPolicy = {

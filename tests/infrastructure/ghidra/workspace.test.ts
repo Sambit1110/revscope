@@ -40,7 +40,7 @@ describe("analysis workspaces", () => {
     expect(dirname(workspace.root)).toBe(workspace.parent);
     expect(basename(workspace.root).startsWith(WORKSPACE_PREFIX)).toBe(true);
     expect(await mode(workspace.root)).toBe(0o700);
-    for (const directory of [workspace.project, workspace.home, workspace.tmp, workspace.logs, dirname(workspace.input), dirname(workspace.exportPath)])
+    for (const directory of [workspace.project, workspace.home, workspace.tmp, workspace.cache, workspace.logs, dirname(workspace.input), dirname(workspace.exportPath)])
       expect(await mode(directory)).toBe(0o700);
     expect(basename(workspace.input)).toBe("artifact");
   });
