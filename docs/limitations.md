@@ -127,3 +127,21 @@
   form is pinned by a guard test, but an unusual form a pattern does not
   anticipate would go unseen.
 - **No continuous integration** is configured yet.
+- **Benchmark scope (Phase 4.4).** `npm run benchmark` covers:
+  - small programs built locally, never real-world software;
+  - Mach-O arm64 executables;
+  - ELF relocatable objects only (this toolchain has no ELF linker);
+  - two hand-built ELF executables.
+
+  It measured these defects and limits, which are not yet fixed:
+  - on stripped binaries, Ghidra's loader label `entry` is reported with
+    `name_confidence: "imported"`, although the binary has no symbol table;
+  - on ELF inputs, `max_address` lies in a non-loaded section's address
+    space and is printed without the space name, so it reads lower than
+    `min_address`;
+  - a truncated ELF header fails as `provider_failure` (`import_failed`)
+    marked retryable, although retrying cannot help;
+  - decompiler signatures often differ from the source. Unused parameters
+    vanish, and optimized code loses parameters and widens types (for
+    example `ulong` for `unsigned`). The program entry decompiles as
+    `entry` with the loader's signature.

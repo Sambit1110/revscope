@@ -16,7 +16,8 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "resolveJsonModule": false,
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts", "vitest.ghidra.config.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "benchmarks/**/*.ts", "vitest.config.ts", "vitest.ghidra.config.ts"]
 }

@@ -247,6 +247,18 @@ output are kept under `<tmpdir>/revscope-diagnostics/`. The location is
 printed on stderr. The tool's output itself still contains no paths or
 logs. This also works with `npm run test:ghidra`.
 
+### Benchmark
+
+```bash
+REVSCOPE_GHIDRA_DIR=/absolute/path/to/ghidra_12.1.4_PUBLIC npm run benchmark
+```
+
+Builds small programs at several optimization levels, stripped and
+unstripped, plus malformed inputs. It analyzes each one and scores the
+result against ground truth taken from the sources and `nm`. It writes
+`results.json` and `report.md` outside the source tree. See
+[benchmarks/README.md](benchmarks/README.md).
+
 ## Evidence records
 
 Every record has these fields, and none of them is defaulted:
@@ -324,6 +336,7 @@ CLI exit codes by category:
 - [Architecture](docs/architecture.md)
 - [Decisions](docs/decisions/)
 - [Limitations](docs/limitations.md)
+- [Benchmark](benchmarks/README.md)
 - [Support matrix](docs/support.md)
 - [Dependencies and licences](docs/dependencies.md)
 

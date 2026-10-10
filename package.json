@@ -15,10 +15,11 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "oxlint --deny-warnings src tests",
+    "lint": "oxlint --deny-warnings src tests benchmarks",
     "test": "npm run build && vitest run",
     "test:ghidra": "npm run build && vitest run --config vitest.ghidra.config.ts",
-    "check": "npm run typecheck && npm run lint && npm test"
+    "check": "npm run typecheck && npm run lint && npm test",
+    "benchmark": "npm run build && node benchmarks/run.ts"
   },
   "dependencies": {
     "zod": "4.6.5"
