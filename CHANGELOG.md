@@ -5,7 +5,7 @@ All notable changes to Revscope are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0.0, minor versions may
 change the CLI, MCP tools, evidence schema and export format.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-11
 
 First public preview.
 
@@ -41,14 +41,21 @@ First public preview.
   benchmark** (`npm run benchmark`) with predefined ground truth, plus an
   optional comparison script for REA's Ghidra provider.
 - Apache-2.0 licence, security policy, contribution guide (DCO), installation
-  guide, CI workflows (not yet run), and a dependency licence check
+  guide, GitHub Actions CI workflows, and a dependency licence check
   (`npm run licenses`).
 
 ### Verified
 
 On macOS 27.0.1 arm64, Ghidra 12.1.4 (locally built natives), Temurin JDK
 25.0.2, Node.js 26.9.0: `npm run check`, `npm run test:ghidra` and
-`npm run benchmark` pass. Node.js 24, Linux, Windows, other Ghidra versions
-and real-world binaries are not yet verified. See
+`npm run benchmark` pass.
+
+In GitHub Actions, `npm run check` passes on Ubuntu 24.04 and macOS 26 with
+Node.js 24.11.x and 26.x. On Ubuntu 24.04 with Ghidra 12.1.4, Temurin JDK 21
+and Node.js 26, `npm run test:ghidra` passes 16 tests and skips the 9
+macOS-only tests; the benchmark has not run on Linux.
+
+Not yet verified: Windows, other Ghidra versions, real Ghidra on Node.js 24,
+the benchmark on Linux, and arbitrary real-world binaries. See
 [docs/support.md](docs/support.md) and
 [docs/limitations.md](docs/limitations.md).
