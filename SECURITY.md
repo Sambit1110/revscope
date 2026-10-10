@@ -5,12 +5,11 @@
 Please report vulnerabilities **privately**, not in public issues, pull
 requests or discussions.
 
-Use GitHub's private vulnerability reporting for this repository: on the
-repository page, open **Security**, then **Report a vulnerability**.
-
-> **Not yet available.** The repository is not published yet. Private
-> vulnerability reporting will be enabled when it is, and this note removed.
-> Until then there is no public reporting channel.
+Use GitHub's private vulnerability reporting, which is enabled for this
+repository: open https://github.com/Sambit1110/revscope, go to the
+**Security** tab, and choose **Report a vulnerability**. The report is
+visible only to you and the repository's maintainers. You need a GitHub
+account to submit one.
 
 Please include:
 
