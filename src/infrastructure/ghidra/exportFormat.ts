@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { jsonShapeIssue } from "../../domain/json.js";
 import { err, ok, type Result } from "../../domain/result.js";
+import { NAME_SOURCES } from "./naming.js";
 
 /**
  * The line-delimited JSON export written by Revscope's RevscopeExport Ghidra
@@ -76,13 +77,16 @@ const headerSchema = z.strictObject({
   }),
 });
 
-const NAME_SOURCES = ["imported", "analysis", "default", "user", "other"] as const;
 
 const functionSchema = z.strictObject({
   type: z.literal("function"),
   address,
   name: label(EXPORT_LIMITS.nameChars),
   name_source: z.enum(NAME_SOURCES),
+  /** Every symbol at the entry address, primary first. */
+  symbols: z
+    .array(z.strictObject({ name: label(EXPORT_LIMITS.nameChars), source: z.enum(NAME_SOURCES), primary: z.boolean() }))
+    .max(16),
   body_bytes: z.number().int().nonnegative(),
   is_thunk: z.boolean(),
   is_external_entry_point: z.boolean(),

@@ -50,6 +50,7 @@ export const functionRecord = (address: string, name: string) => ({
   address,
   name,
   name_source: "imported",
+  symbols: [{ name, source: "imported", primary: true }],
   body_bytes: 6,
   is_thunk: false,
   is_external_entry_point: true,

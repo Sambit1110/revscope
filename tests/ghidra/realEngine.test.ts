@@ -255,6 +255,15 @@ describe("Ghidra real-engine verification", () => {
   });
 });
 
+describe("Ghidra real-engine verification: function names (ELF)", () => {
+  it("presents symbol-table names as imported, with no aliases", async () => {
+    settings();
+    const { at } = parts(await analyze(await fixture()));
+    for (const [address, name] of [["0x400080", "answer"], ["0x400090", "twice"]] as const)
+      expect(at(address)).toMatchObject({ name, ghidra_name: name, name_source: "imported", name_basis: "ghidra-name", name_confidence: "imported", aliases: [] });
+  });
+});
+
 describe("Ghidra real-engine verification: entry points (ELF)", () => {
   it("reports the header-declared entry separately from Ghidra's other external entry points", async () => {
     settings();
@@ -273,6 +282,23 @@ describe.runIf(process.platform === "darwin")("Ghidra real-engine verification: 
     settings();
     const { info } = parts(await analyze(await machoFixture()));
     expect(info).toMatchObject({ executable_format: "Mac OS X Mach-O", language_id: "AARCH64:LE:64:AppleSilicon", image_base: "0x100000000" });
+  });
+
+  it("names the program entry _main, keeping Ghidra's loader label `entry` as an identified alias", async () => {
+    settings();
+    const { at, decompiled } = parts(await analyze(await machoFixture()));
+    expect(at("0x1000004e0")).toMatchObject({
+      name: "_main",
+      name_source: "imported",
+      name_basis: "imported-alias",
+      name_confidence: "imported",
+      ghidra_name: "entry",
+      aliases: [{ name: "entry", source: "imported", role: "loader-entry-label" }],
+    });
+    // The decompile record shows the same display name; the pseudocode keeps Ghidra's.
+    expect(decompiled("0x1000004e0")?.payload).toMatchObject({ name: "_main", ghidra_name: "entry" });
+    for (const [address, name] of [["0x100000460", "_add"], ["0x100000480", "_factorial"], ["0x100000514", "_greeting"]] as const)
+      expect(at(address)).toMatchObject({ name, ghidra_name: name, name_confidence: "imported", aliases: [] });
   });
 
   it("reads the LC_MAIN entry and does not treat exported symbols or the header as entry points", async () => {

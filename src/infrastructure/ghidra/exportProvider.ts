@@ -11,7 +11,8 @@ import type {
 } from "../../application/ports.js";
 import type { EvidenceUnknown } from "../../domain/evidence.js";
 import type { JsonObject } from "../../domain/json.js";
-import { EXPORT_LIMITS, GHIDRA_EXPORT_SCHEMA, type GhidraExport } from "./exportFormat.js";
+import { EXPORT_LIMITS, GHIDRA_EXPORT_SCHEMA, type ExportFunction, type GhidraExport } from "./exportFormat.js";
+import { chooseFunctionName, type FunctionNaming } from "./naming.js";
 
 /** Every Ghidra result is the engine's interpretation, never a reading of the file itself. */
 export const GHIDRA_LIMITATIONS = {
@@ -114,6 +115,16 @@ export class GhidraExportProvider implements AnalysisProvider {
     return CAPABILITIES;
   }
 
+  /** Display name, Ghidra's own name, aliases, and how the display name was chosen. */
+  #naming(entry: ExportFunction): JsonObject {
+    const naming: FunctionNaming = chooseFunctionName(
+      { name: entry.name, source: entry.name_source },
+      entry.symbols,
+      this.#export.header.program.program_entry.addresses.includes(entry.address),
+    );
+    return { ...naming, aliases: naming.aliases.map((alias) => ({ ...alias })) };
+  }
+
   #state(address: string): DecompilationState {
     return this.#export.decompilations.get(address)?.status ?? "not-exported";
   }
@@ -151,8 +162,7 @@ export class GhidraExportProvider implements AnalysisProvider {
           {
             functions: functions.map((entry) => ({
               address: entry.address,
-              name: entry.name,
-              name_source: entry.name_source,
+              ...this.#naming(entry),
               body_bytes: entry.body_bytes,
               is_thunk: entry.is_thunk,
               is_program_entry: header.program.program_entry.addresses.includes(entry.address),
@@ -183,7 +193,9 @@ export class GhidraExportProvider implements AnalysisProvider {
         return this.#ok(
           {
             address,
-            name: entry.name,
+            // The display name; the pseudocode text itself uses ghidra_name.
+            name: this.#naming(entry)["name"] ?? entry.name,
+            ghidra_name: entry.name,
             status: state,
             pseudocode: decompiled?.pseudocode ?? null,
             truncated: decompiled?.truncated ?? false,

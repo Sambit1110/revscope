@@ -55,6 +55,7 @@ public class RevscopeExport extends HeadlessScript {
 	private static final int MAX_SIGNATURE_CHARS = 4096;
 	private static final int MAX_LABEL_CHARS = 256;
 	private static final int MAX_ENTRY_POINTS = 256;
+	private static final int MAX_SYMBOLS = 16;
 	/** Revscope refuses record lines over 256 KiB; stay well below. */
 	private static final int MAX_LINE_BYTES = 200_000;
 
@@ -248,6 +249,26 @@ public class RevscopeExport extends HeadlessScript {
 			",\"decompile_timeout_s\":" + decompileTimeoutSeconds + "}}";
 	}
 
+	/**
+	 * Every symbol at the function's entry, primary first, then by name. One
+	 * address can carry several names: on Mach-O, Ghidra's loader adds an
+	 * `entry` label at the program entry next to the symbol-table name, and
+	 * both are marked IMPORTED. Revscope decides how to present them.
+	 */
+	private static String symbolsAt(Function function) {
+		Symbol[] symbols = function.getProgram().getSymbolTable().getSymbols(function.getEntryPoint());
+		java.util.Arrays.sort(symbols, (a, b) -> a.isPrimary() != b.isPrimary() ? (a.isPrimary() ? -1 : 1)
+				: a.getName().compareTo(b.getName()));
+		StringBuilder builder = new StringBuilder("[");
+		for (int index = 0; index < symbols.length && index < MAX_SYMBOLS; index++) {
+			builder.append(index == 0 ? "" : ",")
+				.append("{\"name\":").append(json(nonEmpty(truncate(symbols[index].getName(), MAX_NAME_CHARS))))
+				.append(",\"source\":").append(json(nameSource(symbols[index])))
+				.append(",\"primary\":").append(symbols[index].isPrimary()).append("}");
+		}
+		return builder.append("]").toString();
+	}
+
 	private String functionRecord(Function function) {
 		Symbol symbol = function.getSymbol();
 		String convention = function.getCallingConventionName();
@@ -256,6 +277,7 @@ public class RevscopeExport extends HeadlessScript {
 			",\"name\":" + json(nonEmpty(truncate(function.getName(), MAX_NAME_CHARS))) +
 			",\"name_source\":" + json(nameSource(symbol)) +
 			",\"body_bytes\":" + function.getBody().getNumAddresses() +
+			",\"symbols\":" + symbolsAt(function) +
 			",\"is_thunk\":" + function.isThunk() +
 			",\"is_external_entry_point\":" +
 			function.getProgram().getSymbolTable().isExternalEntryPoint(function.getEntryPoint()) +
@@ -308,6 +330,8 @@ public class RevscopeExport extends HeadlessScript {
 				return "default";
 			case "USER_DEFINED":
 				return "user";
+			case "AI":
+				return "ai";
 			default:
 				return "other";
 		}
