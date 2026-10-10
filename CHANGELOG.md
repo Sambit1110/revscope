@@ -5,7 +5,7 @@ All notable changes to Revscope are recorded here. The format follows
 [Semantic Versioning](https://semver.org/). Before 1.0.0, minor versions may
 change the CLI, MCP tools, evidence schema and export format.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-11
 
 First public preview.
 
