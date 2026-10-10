@@ -1,0 +1,51 @@
+# Optional real-engine verification on Linux with a pinned, checksum-verified
+# Ghidra 12.1.4. Manual or weekly; never on pull requests. No publishing,
+# deployment, caching or artifact uploads.
+# Ghidra 12.1.4 ships prebuilt natives for Linux x86-64, so the decompiler
+# runs without a native build. The macOS-only real-engine tests (Mach-O and
+# compiled ELF objects) are skipped here.
+name: Real Ghidra (Linux)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1" # Mondays 04:17 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  real-engine:
+    name: test:ghidra (ubuntu-24.04, Ghidra 12.1.4, Temurin 21, Node.js 26)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # From the official release Ghidra_12.1.4_build (published 2026-09-21);
+      # the SHA-256 is the one published in the release notes and asset digest.
+      GHIDRA_URL: https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip
+      GHIDRA_SHA256: ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.x"
+          package-manager-cache: false
+      # Ghidra 12.1.4 declares Java 21 as its minimum and documents 21.
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Download and verify Ghidra 12.1.4
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/ghidra.zip"
+          curl --fail --location --silent --show-error --output "$archive" "$GHIDRA_URL"
+          echo "$GHIDRA_SHA256  $archive" | sha256sum --check --strict
+          unzip -q "$archive" -d "$RUNNER_TEMP/ghidra"
+          test -x "$RUNNER_TEMP/ghidra/ghidra_12.1.4_PUBLIC/support/analyzeHeadless"
+          echo "REVSCOPE_GHIDRA_DIR=$RUNNER_TEMP/ghidra/ghidra_12.1.4_PUBLIC" >> "$GITHUB_ENV"
+          echo "REVSCOPE_JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm run test:ghidra

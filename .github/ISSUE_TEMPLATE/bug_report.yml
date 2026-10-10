@@ -1,0 +1,59 @@
+name: Bug report
+description: Something Revscope does is wrong, crashes, or contradicts its documentation.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security problems must not be reported here.** Follow SECURITY.md instead.
+
+        Do not attach binaries you are not allowed to share. Prefer a program you built yourself, or one of the test fixtures.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The exact command or MCP request. Remove personal paths and anything sensitive.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The JSON Revscope printed (stdout), with sensitive values removed. Errors never contain host paths; if you see one, that is a security bug (see SECURITY.md).
+      render: json
+  - type: input
+    id: revscope-version
+    attributes:
+      label: Revscope version or commit
+      placeholder: "0.1.0 / output of `git rev-parse --short HEAD`"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and architecture, Node.js and npm versions; for analyze-binary also the Ghidra version, whether its natives were built, and the JDK.
+      placeholder: |
+        macOS 27.0.1 arm64, Node.js 26.9.0, npm 11.19.1
+        Ghidra 12.1.4 (natives built locally), Temurin JDK 25.0.2
+    validations:
+      required: true
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Interface
+      options:
+        - CLI
+        - MCP
+        - Both
+        - Not applicable
+    validations:
+      required: true

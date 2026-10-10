@@ -2,16 +2,22 @@
 
 ## Scope
 
-- **The Ghidra provider is verified on one environment and one small
-  binary.** `npm run test:ghidra` passed 9/9 on Ghidra 12.1.4 with locally built macOS arm64 natives, Temurin JDK 25.0.2, Node.js 26.9.0, macOS 27.0.1 arm64, analyzing a
-  592-byte ELF fixture. Still unverified:
-  - other Ghidra versions, Linux and Windows;
+- **The Ghidra provider is verified on one environment and small test
+  programs only.** `npm run test:ghidra` (25/25) and `npm run benchmark`
+  (26/26) pass on macOS 27.0.1 arm64, Ghidra 12.1.4 with locally built
+  natives, Temurin JDK 25.0.2 and Node.js 26.9.0, analyzing generated and
+  locally compiled ELF and Mach-O test programs (see [support.md](support.md)).
+  Still unverified:
+  - Node.js 24, Linux and Windows, and other Ghidra versions (CI workflows
+    are prepared but have not run);
   - real-world binaries (size, timing, determinism);
-  - most of the failure classification patterns.
-- **Earlier runs may have left a Ghidra cache in `/var/tmp/<user>-ghidra`.**
-  Before Phase 4.1, Ghidra's packed-database cache went there. Current
-  versions keep it in the workspace. Revscope never deletes that directory;
-  remove it yourself if you no longer need it.
+  - the `java_runtime`, `export_script_failed` and generic `import_failed`
+    classification patterns.
+- **Ghidra's default cache directory is left alone.** Revscope redirects
+  Ghidra's packed-database cache into each run's private workspace, which is
+  removed afterwards. Ghidra used on its own (outside Revscope) keeps that
+  cache in `/var/tmp/<user>-ghidra`; Revscope never creates, reads or deletes
+  that directory, so remove it yourself if you no longer need it.
 - **Ghidra is not a sandbox.** It parses the untrusted file with the user's
   permissions and network access. Revscope isolates its files, environment
   and processes and bounds its time and output, but does not contain it.
@@ -24,8 +30,14 @@
     Other formats, `LC_UNIXTHREAD` and fat Mach-O files report it as
     unavailable.
   - Only Ghidra's loader label `entry` is recognised, and only at the
-    header-declared program entry beside exactly one other imported name.
-    Other loader-created names stay reported as Ghidra's `imported` names.
+    header-declared program entry: it is checked against the names the
+    file's own symbol tables define there (`program_entry.file_symbols`).
+    Other names Ghidra's loaders create are still reported with Ghidra's
+    `imported` source.
+  - `min_address`/`max_address` are the hull of loaded memory in the default
+    address space; gaps between loaded blocks are not reported. For
+    relocatable objects (`address_placement: relocatable-object`) the
+    addresses are Ghidra's placement, not the file's.
   - Every decompiler warning counts as material uncertainty; Revscope does
     not rank warning text. `fidelity: complete` means no detectable
     uncertainty, not a faithful reconstruction.
@@ -126,17 +138,26 @@
   imports, re-exports and `require`, and flags imports it cannot read. Each
   form is pinned by a guard test, but an unusual form a pattern does not
   anticipate would go unseen.
-- **No continuous integration** is configured yet.
-- **Benchmark scope (Phase 4.4).** `npm run benchmark` covers:
+- **Continuous integration is prepared but has never run.** The workflows
+  in `.github/workflows/` run only once the repository is on GitHub. Until
+  their results are recorded in [support.md](support.md), nothing they cover
+  counts as verified.
+- **Benchmark scope.** `npm run benchmark` covers:
   - small programs built locally, never real-world software;
   - Mach-O arm64 executables;
   - ELF relocatable objects only (this toolchain has no ELF linker);
   - two hand-built ELF executables.
 
-  It measured three defects, fixed in Phase 4.4.1 (see ADR-0007): the
-  stripped-binary `entry` label, the ELF address range, and truncated-ELF
-  retryability. It also measured this limit, which remains:
+  Three defects it found during development are fixed (see ADR-0007): the
+  loader's `entry` label reported as an imported name on stripped binaries,
+  an ELF address range whose maximum read below its minimum, and truncated
+  ELF files reported as a retryable failure. It also measures this
+  limitation, which remains:
   - decompiler signatures often differ from the source. Unused parameters
     vanish, and optimized code loses parameters and widens types (for
     example `ulong` for `unsigned`). The program entry decompiles as
     `entry` with the loader's signature.
+- **The benchmark needs macOS** with the Xcode command-line tools, and its
+  Mach-O `-O0` inputs are not byte-reproducible: the linker writes a random
+  `LC_UUID` (and the ad hoc code signature covers it). Their code and
+  symbols, and Revscope's analysis of them, are identical between builds.

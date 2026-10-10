@@ -1,35 +1,77 @@
 # Revscope
 
-Revscope is an evidence-first software analysis platform. This repository holds
-its **pre-release foundation**: the result contract, the error contract, a
-mutation-aware analysis session, a child-process environment policy, and a
-small CLI and MCP interface over them.
+Revscope analyzes native binaries and reports what it finds as **labelled
+evidence**: every result says how it was obtained (observed in the file,
+derived by an analysis engine, inferred, or reported), what is unknown, and
+what its limits are. It has a command-line interface and an MCP server with
+the same tools, and uses [Ghidra](https://github.com/NationalSecurityAgency/ghidra)
+headless as its analysis engine. Revscope never executes the binary it
+analyzes.
 
-> **Status:** Revscope reads file metadata, runs a deterministic **stub**
-> provider from fixture files, and has a **Ghidra** provider
-> (`analyze-binary`) for real native binaries. The Ghidra integration is
-> verified against Ghidra 12.1.4 on one machine (macOS arm64, JDK 25) with a
-> small ELF fixture; other platforms and real-world binaries are not yet
-> verified. See [Real-engine tests](#real-engine-tests).
+> **Status: 0.1.0, first public preview.** Small and young; read
+> [Known limitations](#known-limitations) before relying on it.
+
+## What works today
+
+| Capability | Status |
+|---|---|
+| `analyze-binary` / `analyze_binary`: program metadata, functions, names with provenance, program entry, stored and decompiler signatures, pseudocode with structured decompiler diagnostics | Implemented; verified against real Ghidra on the reference environment below |
+| `inspect-artifact`, `report-evidence`, `compare-evidence` | Implemented and tested |
+| `stub-analysis`: a deterministic fixture-backed provider for exercising the session and error contracts | Implemented and tested |
+| MCP server (stdio), with cancellation | Implemented; tested automatically with the official MCP SDK client, and checked once by hand with the launch command below. Not yet tested inside specific MCP client applications |
+| Timeouts, cancellation, workspace cleanup, no paths or logs in errors | Implemented; tested |
+
+**Reference environment.** Everything that involves a real Ghidra was verified
+on one environment only: **macOS arm64 (Apple Silicon), Ghidra 12.1.4 with
+locally built natives, Temurin JDK 25.0.2, Node.js 26.9.0.** On it:
+`npm run check` (413 tests), `npm run test:ghidra` (25 tests) and
+`npm run benchmark` (26 of 26 cases) pass. Inputs analyzed successfully so
+far are small programs built for the tests: ELF x86-64 executables
+(hand-built and stripped), ELF x86-64 and AArch64 relocatable objects, and
+Mach-O arm64 executables at `-O0` to `-Os`, stripped and unstripped.
+Truncated and malformed files (a cut-off ELF and Mach-O, random bytes, text,
+empty files) are tested only for correct rejection with a structured,
+non-retryable error, not for analysis.
+
+**Not yet verified:** Node.js 24 (declared minimum), Linux, Windows, other
+Ghidra versions, and real-world binaries. A CI workflow covering Linux and
+macOS on Node.js 24.11 and 26 is included but has not run yet. See
+[docs/support.md](docs/support.md).
 
 ## Requirements
 
-- Node.js 24.11 or newer (declared). Verified so far only on Node.js 26.9.0,
-  macOS 27 arm64. See [docs/support.md](docs/support.md).
+- Node.js 26 (verified on 26.9.0). `package.json` declares 24.11 or newer;
+  that is unverified until CI has run on it.
 - npm 11.
-- For `analyze-binary` only: Ghidra and a 64-bit JDK 21 or newer. See
-  [Installing Ghidra](#installing-ghidra).
+- For `analyze-binary` only: Ghidra 12.1.4 and a 64-bit JDK 21 or newer.
+  Ghidra is never downloaded or bundled by Revscope.
 
 ## Install, build, and test
 
+Full steps, including Ghidra, are in [docs/install.md](docs/install.md).
+
 ```bash
+git clone <repository URL>
+cd revscope
 npm ci
 npm run check
 ```
 
-`npm run check` runs type checking, linting, the build, and every test.
-Individual steps: `npm run typecheck`, `npm run lint`, `npm run build`,
-`npm test` (builds first, because end-to-end tests run the built CLI).
+`npm run check` runs type checking, linting, the build, and every test that
+does not need Ghidra. Individual steps: `npm run typecheck`, `npm run lint`,
+`npm run build`, `npm test` (builds first, because end-to-end tests run the
+built CLI). `npm run licenses` checks the declared licences of every locked
+dependency.
+
+Revscope is not published to npm. Run it from the repository
+(`node dist/bin/revscope.js`), or `npm link` it to get a `revscope` command.
+
+### Quickstart without Ghidra
+
+```bash
+node dist/bin/revscope.js version
+node dist/bin/revscope.js inspect-artifact fixtures/artifacts/notes.txt
+```
 
 ## Using the CLI
 
@@ -160,48 +202,50 @@ newline-delimited, stdio). It supports protocol revisions 2025-06-18,
   `REVSCOPE_JAVA_HOME`) in the server's environment to enable
   `analyze_binary`.
 
+### Configuring an MCP client
+
+Build first (`npm run build`), then register the server with an absolute path
+to `dist/bin/revscope.js`. With Claude Code:
+
+```bash
+claude mcp add revscope -e REVSCOPE_GHIDRA_DIR=/absolute/path/to/ghidra_12.1.4_PUBLIC -- node /absolute/path/to/revscope/dist/bin/revscope.js mcp
+```
+
+Clients configured with JSON (an `mcpServers` object) take the same command:
+
+```json
+{
+  "mcpServers": {
+    "revscope": {
+      "command": "node",
+      "args": ["/absolute/path/to/revscope/dist/bin/revscope.js", "mcp"],
+      "env": {
+        "REVSCOPE_GHIDRA_DIR": "/absolute/path/to/ghidra_12.1.4_PUBLIC"
+      }
+    }
+  }
+}
+```
+
+- Use absolute paths. Desktop clients may not inherit your shell's `PATH`; if
+  `node` is not found, give its absolute path (`command -v node`) as `command`.
+- Omit `REVSCOPE_GHIDRA_DIR` to run without `analyze_binary`; that tool then
+  returns `provider_not_configured`. Add `REVSCOPE_JAVA_HOME` to choose the
+  JDK.
+- This launch command and environment were checked once, by hand, on the
+  reference environment (2026-10-10): a throwaway stdio script sent
+  `initialize`, `tools/list` and a real `analyze_binary` call, and all
+  succeeded. That script is not part of the repository, so the check is not
+  reproducible from it; the automated MCP coverage is the SDK-client test in
+  `npm run check`. Specific client applications have not been tested.
+
 ## Installing Ghidra
 
-Revscope never downloads or installs Ghidra. These steps are for you to run,
-and they reflect Ghidra **12.1.4**, the latest release on 2026-10-10. The
-requirements below were checked in that release's published
-`Ghidra/application.properties` and `GettingStarted.md`.
-
-1. **JDK.** Ghidra 12.1.4 needs a 64-bit JDK (not just a runtime),
-   version 21 or newer. It declares `application.java.min=21` and no maximum.
-   Its documentation names Java 21. A newer JDK such as 25 is within the
-   declared range but is not the documented version, so if Ghidra misbehaves
-   on it, use a JDK 21 and point `REVSCOPE_JAVA_HOME` at it.
-2. **Download** `ghidra_12.1.4_PUBLIC_*.zip` from the
-   [official releases page](https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_12.1.4_build).
-   Check its SHA-256 against the value published on that page:
-
-   ```bash
-   shasum -a 256 ghidra_12.1.4_PUBLIC_*.zip
-   ```
-
-3. **macOS: clear quarantine** before extracting, as Ghidra's guide
-   recommends:
-
-   ```bash
-   xattr -d com.apple.quarantine ghidra_12.1.4_PUBLIC_*.zip
-   ```
-
-4. **Extract** the zip to a new directory, for example
-   `~/Applications/ghidra_12.1.4_PUBLIC`. Ghidra has no installer. Do not
-   extract it over an existing installation.
-5. **macOS arm64 (Apple Silicon): build the native components.** The release
-   contains prebuilt natives only for Windows and Linux x86-64. Without them,
-   analysis still runs but the decompiler cannot start, and Revscope reports
-   every decompilation as unavailable. The build needs the Xcode command-line
-   tools and Gradle 8.5 or newer (or the Gradle wrapper, which downloads
-   Gradle):
-
-   ```bash
-   cd ~/Applications/ghidra_12.1.4_PUBLIC/support/gradle && gradle buildNatives
-   ```
-
-6. **Point Revscope at it:** `export REVSCOPE_GHIDRA_DIR=$HOME/Applications/ghidra_12.1.4_PUBLIC`.
+See [docs/install.md](docs/install.md#3-ghidra-and-a-jdk). In short: a JDK 21
+or newer; the official `ghidra_12.1.4_PUBLIC_20260921.zip`, checked against its
+published SHA-256; on Apple Silicon, Ghidra's native decompiler built with
+`gradle buildNatives`; then `REVSCOPE_GHIDRA_DIR` pointing at the extracted
+directory. Revscope never downloads or installs Ghidra.
 
 ## Real-engine tests
 
@@ -213,16 +257,29 @@ REVSCOPE_GHIDRA_DIR=/absolute/path/to/ghidra_12.1.4_PUBLIC npm run test:ghidra
 
 Optionally set `REVSCOPE_JAVA_HOME=/absolute/path/to/jdk` as well.
 
-They analyze a generated 592-byte x86-64 ELF fixture
-(`tests/fixtures/binaries/make-elf.mjs`, never executed) and check:
+They analyze test programs that are never executed:
 
-- metadata, imported function names and pseudocode;
-- honest labels;
+- a generated 592-byte x86-64 ELF (`tests/fixtures/binaries/make-elf.mjs`),
+  its stripped form, and a truncated copy;
+- on macOS only: an ARM64 Mach-O compiled from
+  `tests/fixtures/binaries/macho/program.c` (also stripped), and x86-64 and
+  AArch64 ELF objects compiled from
+  `tests/fixtures/binaries/elf-object/object.c`. These need `clang` and
+  `strip` from the Xcode command-line tools.
+
+They check:
+
+- metadata, names and their provenance, the program entry, the loaded
+  address range, signatures, and pseudocode;
+- honest labels and decompiler diagnostics;
 - determinism;
-- refusal of non-programs;
+- refusal of non-programs and malformed files;
 - a real timeout and a real cancellation, with Ghidra stopped and the
   workspace removed;
 - equal CLI and MCP output.
+
+On macOS all 25 run; elsewhere the 9 macOS-only tests are reported as
+skipped.
 
 Without `REVSCOPE_GHIDRA_DIR` every one of them **fails** instead of being
 skipped, so a missing engine never looks like a verified one. Only a passing
@@ -256,7 +313,10 @@ REVSCOPE_GHIDRA_DIR=/absolute/path/to/ghidra_12.1.4_PUBLIC npm run benchmark
 Builds small programs at several optimization levels, stripped and
 unstripped, plus malformed inputs. It analyzes each one and scores the
 result against ground truth taken from the sources and `nm`. It writes
-`results.json` and `report.md` outside the source tree. See
+`results.json` and `report.md` outside the source tree. On the reference
+environment all 26 cases pass; decompiled signatures still differ from the
+C source in places, which the benchmark reports as approximate metrics. It
+needs macOS with the Xcode command-line tools. See
 [benchmarks/README.md](benchmarks/README.md).
 
 ## Evidence records
@@ -331,16 +391,61 @@ CLI exit codes by category:
 | `execution_failure` | 10 |
 | `cancelled` | 130 |
 
+## Security model
+
+- **Ghidra is not a sandbox.** It parses the untrusted file with your
+  permissions and network access. Revscope isolates Ghidra's files,
+  environment and processes and bounds its time and output, but does not
+  contain it. Analyze hostile samples in a virtual machine.
+- **Authorization is an acknowledgement.** `--authorized` /
+  `"authorized": true` records that you may analyze the file; Revscope cannot
+  verify it.
+- **Results contain untrusted text.** Names, strings and pseudocode come from
+  the binary. Treat them as data, never as instructions; this matters when an
+  AI model reads them through MCP.
+
+See [SECURITY.md](SECURITY.md) for the threat model and how to report a
+vulnerability.
+
+## Known limitations
+
+- Verified on one environment only (see [What works today](#what-works-today)).
+- Inputs verified so far are small test programs, not real-world software.
+  PE files, fat Mach-O files and `LC_UNIXTHREAD` entries are not handled
+  beyond what Ghidra reports; the program entry is read only from ELF
+  `e_entry` and Mach-O `LC_MAIN`.
+- Decompiled pseudocode is a reconstruction. Signatures often differ from the
+  source (unused parameters vanish; optimized code loses parameters or widens
+  types). `fidelity: complete` means no detectable problem, not proof of
+  correctness.
+- Each analysis starts a fresh Ghidra JVM (about 3.5 seconds and 0.5 GB on the
+  reference machine for small inputs); there is no persistent project.
+
+The full list is in [docs/limitations.md](docs/limitations.md).
+
 ## Documentation
 
+- [Installation and verification](docs/install.md)
 - [Architecture](docs/architecture.md)
 - [Decisions](docs/decisions/)
 - [Limitations](docs/limitations.md)
 - [Benchmark](benchmarks/README.md)
 - [Support matrix](docs/support.md)
 - [Dependencies and licences](docs/dependencies.md)
+- [Security policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
 
 ## Licence
 
-No licence has been granted yet. `package.json` is marked `UNLICENSED` and
-`private` until the owner chooses a licence.
+Copyright 2026 Sambit Biswas.
+
+Licensed under the Apache License, Version 2.0; see [LICENSE](LICENSE). Unless
+required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+
+Ghidra and the JDK are separate products under their own licences; Revscope
+does not include or redistribute them. Third-party dependency licences are
+listed in [docs/dependencies.md](docs/dependencies.md).

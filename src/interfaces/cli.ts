@@ -100,7 +100,7 @@ const resolvePath = (cwd: string, value: string): string => (value === "" ? valu
 
 export const usage = (): string =>
   [
-    `Revscope ${PRODUCT_VERSION} (pre-release foundation; no real binary analysis provider yet)`,
+    `Revscope ${PRODUCT_VERSION}: evidence-labelled binary analysis (CLI and MCP; Ghidra headless as the engine)`,
     "",
     "Usage:",
     ...Object.values(COMMANDS).map(({ usage: line }) => `  ${line}`),
@@ -108,7 +108,7 @@ export const usage = (): string =>
     "  revscope mcp            Serve the same tools over MCP (stdio)",
     "  revscope version",
     "",
-    "analyze-binary needs a Ghidra installation (REVSCOPE_GHIDRA_DIR) and --authorized, which records",
+    "analyze-binary needs a Ghidra installation (REVSCOPE_GHIDRA_DIR; optionally REVSCOPE_JAVA_HOME) and --authorized, which records",
     "that you are authorized to analyze the file; Revscope cannot verify it. The binary is never executed.",
     "",
     "Tool commands print one JSON document on stdout: {\"ok\": true, ...} or {\"ok\": false, \"error\": {...}}.",

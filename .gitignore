@@ -6,3 +6,15 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 *.evidence.json
+
+# Local environment and secrets: never commit these.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.npmrc
+# Package tarballs from `npm pack`.
+*.tgz

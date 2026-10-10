@@ -2,8 +2,20 @@
   "name": "revscope",
   "version": "0.1.0",
   "private": true,
-  "description": "Evidence-first software reverse-engineering and analysis platform (pre-release foundation).",
-  "license": "UNLICENSED",
+  "description": "Evidence-labelled binary analysis for the command line and MCP clients, using Ghidra headless as the analysis engine.",
+  "license": "Apache-2.0",
+  "author": "Sambit Biswas",
+  "keywords": [
+    "reverse-engineering",
+    "binary-analysis",
+    "ghidra",
+    "decompiler",
+    "mcp",
+    "model-context-protocol",
+    "cli",
+    "evidence",
+    "static-analysis"
+  ],
   "type": "module",
   "engines": {
     "node": ">=24.11.0"
@@ -11,15 +23,24 @@
   "bin": {
     "revscope": "dist/bin/revscope.js"
   },
+  "files": [
+    "dist/",
+    "ghidra-scripts/",
+    "docs/",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "oxlint --deny-warnings src tests benchmarks",
+    "lint": "oxlint --deny-warnings src tests benchmarks scripts",
     "test": "npm run build && vitest run",
     "test:ghidra": "npm run build && vitest run --config vitest.ghidra.config.ts",
     "check": "npm run typecheck && npm run lint && npm test",
-    "benchmark": "npm run build && node benchmarks/run.ts"
+    "benchmark": "npm run build && node benchmarks/run.ts",
+    "licenses": "node scripts/check-licenses.ts",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "zod": "4.6.5"

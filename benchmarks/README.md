@@ -18,6 +18,24 @@ REVSCOPE_GHIDRA_DIR=/abs/ghidra_12.1.4_PUBLIC npm run benchmark -- [--out <dir>]
 - No dependencies beyond the repository's own; the scripts run with
   Node.js's built-in TypeScript type stripping.
 
+## Reference result
+
+On macOS 27.0.1 arm64 with Ghidra 12.1.4 (locally built natives), Temurin
+JDK 25.0.2 and Node.js 26.9.0, at version 0.1.0: **26 of 26 cases pass**.
+That means every exact check passes on every analyzed case (79 of 80 ground-truth functions are
+recovered; the miss is an unreferenced function in the stripped hand-built
+ELF, which recovery only measures), output is byte-identical across three
+runs, and no run leaves files or processes behind. Approximate metrics show
+where decompiled signatures differ from the C source: 61 of 79 return types
+and 62 of 79 parameter counts match exactly. This is one environment; it is
+not a claim about others.
+
+**Reproducibility.** The benchmark needs macOS with the Xcode command-line
+tools. Mach-O inputs built at `-O0` are not byte-identical between builds:
+the linker writes a random `LC_UUID`, which the ad hoc code signature
+covers. Their code and symbols, and Revscope's analysis of them, are
+identical. Every input's SHA-256 is recorded in `results.json`.
+
 ## Cases
 
 Defined in [`manifest.ts`](manifest.ts), with sources in [`cases/`](cases):

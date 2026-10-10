@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest a capability or an improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Revscope is small and focused. Describing the problem you are trying to solve helps more than a proposed implementation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what stops you today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What would you like Revscope to do? How should the result be labelled as evidence (observed, derived, inferred, reported)?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

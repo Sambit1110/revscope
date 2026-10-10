@@ -264,7 +264,9 @@ tool reports `provider_not_configured`. ADR-0007 records the decisions.
 
 **Verification.** Everything below is tested with a fake `analyzeHeadless`
 in `npm run check`. It was verified against a real Ghidra with
-`npm run test:ghidra` (9/9) on one environment only: Ghidra 12.1.4 with locally built macOS arm64 natives, Temurin JDK 25.0.2, Node.js 26.9.0, macOS 27.0.1 arm64.
+`npm run test:ghidra` (25/25 at 0.1.0) and the benchmark on one environment
+only: Ghidra 12.1.4 with locally built macOS arm64 natives, Temurin JDK
+25.0.2, Node.js 26.9.0, macOS 27.0.1 arm64.
 ADR-0007 lists what that covers and what remains unverified.
 
 **One run, step by step:**

@@ -32,6 +32,9 @@ describe("documented CLI usage against fixtures", () => {
     const help = revscope("--help");
     expect(help.status).toBe(0);
     expect(help.stdout).toContain("revscope inspect-artifact <file>");
+    // The help must describe what exists: the Ghidra engine, and no "not yet" claims about it.
+    expect(help.stdout).toContain("Ghidra headless as the engine");
+    expect(help.stdout).not.toMatch(/no real binary analysis|pre-release foundation/u);
     const manifest = JSON.parse(await readFile(join(REPO_ROOT, "package.json"), "utf8")) as { version: string };
     expect(revscope("version").stdout.trim()).toBe(manifest.version);
     const tools = JSON.parse(revscope("tools").stdout) as { tools: { name: string; cli_command: string }[] };

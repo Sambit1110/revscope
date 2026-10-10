@@ -1,0 +1,59 @@
+# Minimal CI: no publishing, deployment, caching or artifact uploads.
+# Actions are pinned by full commit SHA (the tag is in the comment).
+# Runner labels checked against GitHub's "GitHub-hosted runners" reference on
+# 2026-10-10: ubuntu-24.04 (Linux x64) and macos-26 (macOS arm64, what
+# macos-latest currently maps to). Pinned images keep results comparable.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (${{ matrix.os }}, Node.js ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+        # 24.11.x is the minimum declared in package.json; 26.x is what Revscope is developed on.
+        node: ["24.11.x", "26.x"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - name: Versions
+        run: node --version && npm --version
+      - run: npm ci
+      - run: npm run check
+
+  supply-chain:
+    name: supply chain (audit, licences)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.x"
+          package-manager-cache: false
+      # Both read package-lock.json only; nothing is installed.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=low
+      - name: Check dependency licences
+        run: npm run licenses
