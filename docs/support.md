@@ -2,18 +2,19 @@
 
 A runtime, platform or Ghidra setup is **verified** only when the relevant
 check has actually run there and passed. Anything declared or configured but
-not yet run is **unverified**. CI workflows exist in `.github/workflows/`,
-but no CI job has run yet (nothing has been pushed to the GitHub repository
-yet); this page will be updated from their results.
+not yet run is **unverified**. GitHub Actions results below are from the
+first runs of `.github/workflows/ci.yml` and `.github/workflows/ghidra.yml`
+on commit `b7f4837`; later commits must pass again.
 
 ## Runtime and platform
 
 | Runtime / platform | Status | Evidence |
 |---|---|---|
 | Node.js 26.9.0, npm 11.19.1, macOS 27.0.1 arm64 | **Verified** locally | `npm run check` passes (413 tests), 2026-10-10 |
-| Node.js 24.11+ (declared minimum in `engines`) | Unverified | Not available on the development host. The CI workflow tests 24.11.x on Linux and macOS |
-| Node.js 26.x on Linux x64 (`ubuntu-24.04`) | Unverified | CI workflow prepared, not yet run |
-| Node.js 26.x on macOS arm64 runners (`macos-26`) | Unverified on CI | Same OS family as the reference machine, but not yet run on CI |
+| Node.js 24.11.x and 26.x on Linux x64 (`ubuntu-24.04`) | **Verified** on CI | `npm ci` and `npm run check` pass (`ci.yml`, commit `b7f4837`) |
+| Node.js 24.11.x and 26.x on macOS arm64 (`macos-26`) | **Verified** on CI | `npm ci` and `npm run check` pass (`ci.yml`, commit `b7f4837`) |
+| Node.js 24.11.x with a real Ghidra | Unverified | Real-engine tests and the benchmark have run on Node.js 26 only |
+| Production dependency audit and licence check | **Passing** on CI | `npm audit --omit=dev` and `npm run licenses` (`ci.yml`, commit `b7f4837`) |
 | Windows | Unsupported for now | Never run. The tests assume POSIX in places, and the Windows process-tree and `O_NOFOLLOW` fallbacks have never executed |
 
 ## Analysis engine
@@ -22,7 +23,7 @@ yet); this page will be updated from their results.
 |---|---|---|
 | Fake `analyzeHeadless` (part of `npm run check`) | **Verified** | Process lifecycle, export validation, labels, errors, cleanup, CLI/MCP equivalence |
 | Ghidra 12.1.4, macOS 27.0.1 arm64, locally built natives, Temurin JDK 25.0.2, Node.js 26.9.0 | **Verified** | `npm run test:ghidra` 25/25 and `npm run benchmark` 26/26, 2026-10-10 |
-| Ghidra 12.1.4 on Linux x64 with Temurin JDK 21 | Unverified | Optional `ghidra.yml` workflow prepared (manual or weekly), not yet run. The 9 macOS-only real-engine tests are skipped there |
+| Ghidra 12.1.4 (prebuilt Linux natives), Linux x64 (`ubuntu-24.04`), Temurin JDK 21, Node.js 26.x | **Verified** on CI, partially | `npm run test:ghidra`: 16 passed, 9 skipped (`ghidra.yml`, commit `b7f4837`). The skipped tests are the macOS-only Mach-O and compiled-ELF-object tests. The benchmark has not run on Linux |
 | Ghidra 12.1.4 on macOS arm64 without built natives | Unverified | Expected: analysis runs, every decompilation reported unavailable |
 | Other Ghidra versions | Unverified | The export script is compiled and run against 12.1.4 only |
 | Ghidra on Windows | Unsupported for now | Never run |

@@ -15,15 +15,15 @@ analyzes.
 
 | Capability | Status |
 |---|---|
-| `analyze-binary` / `analyze_binary`: program metadata, functions, names with provenance, program entry, stored and decompiler signatures, pseudocode with structured decompiler diagnostics | Implemented; verified against real Ghidra on the reference environment below |
+| `analyze-binary` / `analyze_binary`: program metadata, functions, names with provenance, program entry, stored and decompiler signatures, pseudocode with structured decompiler diagnostics | Implemented; verified against real Ghidra on the reference environment below, and partially on Linux in CI |
 | `inspect-artifact`, `report-evidence`, `compare-evidence` | Implemented and tested |
 | `stub-analysis`: a deterministic fixture-backed provider for exercising the session and error contracts | Implemented and tested |
 | MCP server (stdio), with cancellation | Implemented; tested automatically with the official MCP SDK client, and checked once by hand with the launch command below. Not yet tested inside specific MCP client applications |
 | Timeouts, cancellation, workspace cleanup, no paths or logs in errors | Implemented; tested |
 
-**Reference environment.** Everything that involves a real Ghidra was verified
-on one environment only: **macOS arm64 (Apple Silicon), Ghidra 12.1.4 with
-locally built natives, Temurin JDK 25.0.2, Node.js 26.9.0.** On it:
+**Reference environment.** Full real-Ghidra verification has been done on one
+environment only: **macOS arm64 (Apple Silicon), Ghidra 12.1.4 with locally
+built natives, Temurin JDK 25.0.2, Node.js 26.9.0.** On it:
 `npm run check` (413 tests), `npm run test:ghidra` (25 tests) and
 `npm run benchmark` (26 of 26 cases) pass. Inputs analyzed successfully so
 far are small programs built for the tests: ELF x86-64 executables
@@ -33,15 +33,21 @@ Truncated and malformed files (a cut-off ELF and Mach-O, random bytes, text,
 empty files) are tested only for correct rejection with a structured,
 non-retryable error, not for analysis.
 
-**Not yet verified:** Node.js 24 (declared minimum), Linux, Windows, other
-Ghidra versions, and real-world binaries. A CI workflow covering Linux and
-macOS on Node.js 24.11 and 26 is included but has not run yet. See
-[docs/support.md](docs/support.md).
+**GitHub Actions** (first runs, commit `b7f4837`): `npm run check` passes on
+Linux x64 (`ubuntu-24.04`) and macOS arm64 (`macos-26`) with Node.js 24.11.x
+and 26.x, and the dependency audit and licence check pass. The real-engine
+tests also run on Linux x64 (`ubuntu-24.04`, Ghidra 12.1.4, Temurin JDK 21,
+Node.js 26.x): 16 pass and the 9 macOS-only tests are skipped.
+
+**Not yet verified:** Windows, other Ghidra versions, real Ghidra on Node.js
+24, the benchmark on Linux, specific MCP client applications, and real-world
+binaries. See [docs/support.md](docs/support.md).
 
 ## Requirements
 
-- Node.js 26 (verified on 26.9.0). `package.json` declares 24.11 or newer;
-  that is unverified until CI has run on it.
+- Node.js 24.11 or newer. `npm run check` passes on 24.11.x and 26.x in CI
+  (Linux and macOS) and on 26.9.0 locally; real-Ghidra tests have run on
+  Node.js 26 only.
 - npm 11.
 - For `analyze-binary` only: Ghidra 12.1.4 and a 64-bit JDK 21 or newer.
   Ghidra is never downloaded or bundled by Revscope.

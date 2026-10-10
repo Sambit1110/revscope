@@ -2,14 +2,16 @@
 
 ## Scope
 
-- **The Ghidra provider is verified on one environment and small test
-  programs only.** `npm run test:ghidra` (25/25) and `npm run benchmark`
-  (26/26) pass on macOS 27.0.1 arm64, Ghidra 12.1.4 with locally built
-  natives, Temurin JDK 25.0.2 and Node.js 26.9.0, analyzing generated and
-  locally compiled ELF and Mach-O test programs (see [support.md](support.md)).
-  Still unverified:
-  - Node.js 24, Linux and Windows, and other Ghidra versions (CI workflows
-    are prepared but have not run);
+- **The Ghidra provider is verified on small test programs only, fully on
+  one environment and partially on a second.** `npm run test:ghidra` (25/25)
+  and `npm run benchmark` (26/26) pass on macOS 27.0.1 arm64, Ghidra 12.1.4
+  with locally built natives, Temurin JDK 25.0.2 and Node.js 26.9.0. On
+  Linux x64 in CI (Ubuntu 24.04, Ghidra 12.1.4, Temurin JDK 21, Node.js 26),
+  `npm run test:ghidra` passes 16 tests and skips the 9 macOS-only ones; the
+  benchmark has not run there (see [support.md](support.md)). Still
+  unverified:
+  - Windows, other Ghidra versions, real Ghidra on Node.js 24, and the
+    macOS-only real-engine tests and the benchmark on Linux;
   - real-world binaries (size, timing, determinism);
   - the `java_runtime`, `export_script_failed` and generic `import_failed`
     classification patterns.
@@ -68,7 +70,8 @@
     terminated. It is reported as a cleanup failure only while it holds the
     output pipes.
   - On Windows only the direct child is signalled; this is unverified.
-  - Process-group behaviour has been exercised only on macOS.
+  - Process-group behaviour has been exercised on macOS (locally and in CI)
+    and on Linux x64 in CI.
 - **Sessions do not persist.** Each `stub-analysis` invocation and each MCP
   `tools/call` uses a fresh in-memory session. Session state does not carry
   over between MCP calls.
@@ -138,10 +141,10 @@
   imports, re-exports and `require`, and flags imports it cannot read. Each
   form is pinned by a guard test, but an unusual form a pattern does not
   anticipate would go unseen.
-- **Continuous integration is prepared but has never run.** The workflows
-  in `.github/workflows/` run only once the repository is on GitHub. Until
-  their results are recorded in [support.md](support.md), nothing they cover
-  counts as verified.
+- **Continuous integration covers Linux x64 and macOS arm64 only.** The
+  first runs passed on commit `b7f4837` (see [support.md](support.md)). The
+  real-Ghidra workflow runs only on demand or weekly, not on every change,
+  and Windows is not tested.
 - **Benchmark scope.** `npm run benchmark` covers:
   - small programs built locally, never real-world software;
   - Mach-O arm64 executables;

@@ -6,12 +6,14 @@ choose use `/absolute/path/...`.
 
 Verified end to end only on the reference environment: macOS arm64, Ghidra
 12.1.4 with locally built natives, Temurin JDK 25.0.2, Node.js 26.9.0, npm
-11. Other environments are unverified (see [support.md](support.md)).
+11. Parts are also verified in CI on Linux x64 and macOS arm64; everything
+else is unverified (see [support.md](support.md)).
 
 ## 1. Prerequisites
 
-- Node.js 26 and npm 11. `package.json` declares Node.js 24.11 or newer, but
-  that is unverified until CI has run on it.
+- Node.js 24.11 or newer (`npm run check` passes on 24.11.x and 26.x in CI)
+  and npm 11. The real-engine steps below have been verified on Node.js 26
+  only.
 - git.
 - For `analyze-binary`: a 64-bit JDK 21 or newer, and Ghidra 12.1.4
   (step 3).
