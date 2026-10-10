@@ -9,10 +9,11 @@
  * like a verified one.
  */
 import { spawnSync } from "node:child_process";
-import { readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, readdir, stat, writeFile } from "node:fs/promises";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { executeTool } from "../../src/application/tools/registry.js";
@@ -46,6 +47,46 @@ const fixture = async () => {
   const path = join(await tempDir(), "fixture.elf");
   await writeFile(path, makeElf());
   return path;
+};
+
+/**
+ * Compile the Mach-O test program into a temporary directory with the Xcode
+ * command-line tools. The binary is analyzed only, never run; execute
+ * permission is removed.
+ */
+const MACHO_SOURCE = fileURLToPath(new URL("../fixtures/binaries/macho/program.c", import.meta.url));
+const machoFixture = async () => {
+  const path = join(await tempDir(), "program");
+  const compiled = spawnSync("clang", ["-arch", "arm64", "-O0", "-o", path, MACHO_SOURCE], { encoding: "utf8", timeout: 120_000 });
+  if (compiled.status !== 0)
+    throw new Error(`The Mach-O fixture needs clang from the Xcode command-line tools: ${compiled.error?.message ?? compiled.stderr}`);
+  await chmod(path, 0o644);
+  return path;
+};
+
+interface FunctionEntry {
+  readonly address: string;
+  readonly name: string;
+  readonly is_program_entry: boolean;
+  readonly is_external_entry_point: boolean;
+  readonly [field: string]: unknown;
+}
+
+/** The parts of a successful analysis the tests look at. */
+const parts = (output: ToolOutput) => {
+  const records = success(output).records;
+  const info = byOperation(records, "program_info")[0]?.payload as Record<string, unknown>;
+  const list = byOperation(records, "list_functions")[0];
+  if (list === undefined) throw new Error("no function list");
+  const { functions } = list.payload as { functions: FunctionEntry[] };
+  const at = (address: string) => {
+    const found = functions.find((entry) => entry.address === address);
+    if (found === undefined) throw new Error(`no function at ${address}`);
+    return found;
+  };
+  const decompiled = (address: string) =>
+    byOperation(records, "decompile").find(({ payload }) => (payload as { address: string }).address === address);
+  return { records, info, functions, at, decompiled };
 };
 
 const analyze = async (path: string, extra: Record<string, unknown> = {}) =>
@@ -211,5 +252,47 @@ describe("Ghidra real-engine verification", () => {
     await served;
     const mcp = (JSON.parse(lines[0] ?? "null") as { result: { structuredContent: unknown } }).result.structuredContent;
     expect(mcp).toEqual(JSON.parse(cli.stdout));
+  });
+});
+
+describe("Ghidra real-engine verification: entry points (ELF)", () => {
+  it("reports the header-declared entry separately from Ghidra's other external entry points", async () => {
+    settings();
+    const { info, at } = parts(await analyze(await fixture()));
+    expect(info["program_entry"]).toEqual({ source: "elf-header", addresses: ["0x400080"], reason: null });
+    expect(info["other_external_entry_points"]).toEqual(["0x400090"]);
+    expect(at("0x400080")).toMatchObject({ name: "answer", is_program_entry: true, is_external_entry_point: true });
+    // A global symbol Ghidra marks as an external entry point is not the program entry.
+    expect(at("0x400090")).toMatchObject({ name: "twice", is_program_entry: false, is_external_entry_point: true });
+  });
+});
+
+// The Mach-O fixture is compiled with the Xcode command-line tools, so it runs on macOS only.
+describe.runIf(process.platform === "darwin")("Ghidra real-engine verification: ARM64 Mach-O fixture (macOS)", () => {
+  it("identifies the format and architecture", async () => {
+    settings();
+    const { info } = parts(await analyze(await machoFixture()));
+    expect(info).toMatchObject({ executable_format: "Mac OS X Mach-O", language_id: "AARCH64:LE:64:AppleSilicon", image_base: "0x100000000" });
+  });
+
+  it("reads the LC_MAIN entry and does not treat exported symbols or the header as entry points", async () => {
+    settings();
+    const { info, at, functions } = parts(await analyze(await machoFixture()));
+    expect(info["program_entry"]).toEqual({ source: "macho-lc-main", addresses: ["0x1000004e0"], reason: null });
+    // Exported symbols (_add, _factorial) and the Mach-O header symbol are external entry points, not program entries.
+    expect(info["other_external_entry_points"]).toEqual(expect.arrayContaining(["0x100000000", "0x100000460", "0x100000480"]));
+    expect(info["other_external_entry_points"]).not.toContain("0x1000004e0");
+    expect(functions.filter(({ is_program_entry }) => is_program_entry).map(({ address }) => address)).toEqual(["0x1000004e0"]);
+    expect(at("0x100000460")).toMatchObject({ is_program_entry: false, is_external_entry_point: true });
+    // A file-local (non-exported) function is neither.
+    expect(at("0x100000514")).toMatchObject({ is_program_entry: false, is_external_entry_point: false });
+  });
+
+  it("produces identical evidence for identical runs (determinism)", async () => {
+    settings();
+    const path = await machoFixture();
+    const first = success(await analyze(path)).records.map(({ evidence_id }) => evidence_id);
+    const second = success(await analyze(path)).records.map(({ evidence_id }) => evidence_id);
+    expect(second).toEqual(first);
   });
 });

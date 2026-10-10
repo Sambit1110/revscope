@@ -23,13 +23,22 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.decompiler.DecompiledFunction;
+import ghidra.app.util.bin.FileBytesProvider;
+import ghidra.app.util.bin.format.elf.ElfHeader;
+import ghidra.app.util.bin.format.macho.MachHeader;
+import ghidra.app.util.bin.format.macho.commands.EntryPointCommand;
+import ghidra.app.util.bin.format.macho.commands.SegmentCommand;
 import ghidra.app.util.headless.HeadlessScript;
+import ghidra.app.util.opinion.ElfLoader;
+import ghidra.app.util.opinion.MachoLoader;
 import ghidra.framework.Application;
+import ghidra.program.database.mem.FileBytes;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressIterator;
 import ghidra.program.model.address.AddressSpace;
@@ -40,8 +49,8 @@ import ghidra.program.model.symbol.Symbol;
 
 public class RevscopeExport extends HeadlessScript {
 
-	private static final String SCHEMA = "revscope.ghidra-export/1";
-	private static final String SCRIPT_VERSION = "1";
+	private static final String SCHEMA = "revscope.ghidra-export/2";
+	private static final String SCRIPT_VERSION = "2";
 	private static final int MAX_NAME_CHARS = 1024;
 	private static final int MAX_SIGNATURE_CHARS = 4096;
 	private static final int MAX_LABEL_CHARS = 256;
@@ -144,6 +153,63 @@ public class RevscopeExport extends HeadlessScript {
 			function.getEntryPoint().getAddressSpace().equals(defaultSpace);
 	}
 
+	/**
+	 * The program's entry point as its file header declares it, read with the
+	 * same Ghidra format parsers the loaders use, over the original file bytes.
+	 * Ghidra's "external entry points" also include exported symbols, so they
+	 * cannot tell the program entry apart; the header can. Only ELF e_entry and
+	 * Mach-O LC_MAIN are read; anything else is reported as unavailable.
+	 */
+	private String programEntry(Program program) {
+		String format = program.getExecutableFormat();
+		List<FileBytes> files = program.getMemory().getAllFileBytes();
+		if (files.isEmpty()) {
+			return entryJson("unavailable", null, "Ghidra holds no original file bytes for this program.");
+		}
+		FileBytesProvider bytes = new FileBytesProvider(files.get(0));
+		AddressSpace space = program.getAddressFactory().getDefaultAddressSpace();
+		long imageBase = program.getImageBase().getOffset();
+		try {
+			if (ElfLoader.ELF_NAME.equals(format)) {
+				ElfHeader elf = new ElfHeader(bytes, message -> {});
+				elf.parse();
+				if (elf.e_entry() == 0) {
+					return entryJson("unavailable", null, "The ELF header declares no entry point.");
+				}
+				// Ghidra may load a position-independent file at another base.
+				return entryAt(program, space.getAddress(elf.e_entry() + (imageBase - elf.getImageBase())), "elf-header");
+			}
+			if (MachoLoader.MACH_O_NAME.equals(format)) {
+				MachHeader mach = new MachHeader(bytes).parse();
+				List<EntryPointCommand> mains = mach.getLoadCommands(EntryPointCommand.class);
+				SegmentCommand text = mach.getSegment("__TEXT");
+				if (mains.isEmpty() || text == null) {
+					return entryJson("unavailable", null,
+						"The Mach-O file has no LC_MAIN entry point; other entry forms are not read.");
+				}
+				long slide = imageBase - text.getVMaddress();
+				long entry = text.getVMaddress() + mains.get(0).getEntryOffset() - text.getFileOffset() + slide;
+				return entryAt(program, space.getAddress(entry), "macho-lc-main");
+			}
+			return entryJson("unavailable", null,
+				"Revscope reads program entry points from ELF and Mach-O headers only.");
+		}
+		catch (Exception e) {
+			return entryJson("unavailable", null,
+				"Ghidra's format parser could not read the header (" + e.getClass().getSimpleName() + ").");
+		}
+	}
+
+	private static String entryAt(Program program, Address entry, String source) {
+		return program.getMemory().contains(entry) ? entryJson(source, entry, null)
+				: entryJson("unavailable", null, "The header's entry point lies outside the loaded program.");
+	}
+
+	private static String entryJson(String source, Address entry, String reason) {
+		return "{\"source\":" + json(source) + ",\"addresses\":" + (entry == null ? "[]" : "[" + json(hex(entry)) + "]") +
+			",\"reason\":" + (reason == null ? "null" : json(reason)) + "}";
+	}
+
 	// analysisTimeoutOccurred() declares the checked ImproperUseException.
 	private String header(Program program, int maxFunctions, boolean decompile,
 			int decompileTimeoutSeconds, String decompilerState) throws Exception {
@@ -174,7 +240,8 @@ public class RevscopeExport extends HeadlessScript {
 			",\"image_base\":" + json(hex(program.getImageBase())) +
 			",\"min_address\":" + nullableAddress(program.getMinAddress()) +
 			",\"max_address\":" + nullableAddress(program.getMaxAddress()) +
-			",\"entry_points\":" + entries + "}" +
+			",\"program_entry\":" + programEntry(program) +
+			",\"external_entry_points\":" + entries + "}" +
 			",\"analysis\":{\"timed_out\":" + analysisTimeoutOccurred() +
 			",\"decompiler\":" + json(decompilerState) + "}" +
 			",\"limits\":{\"max_functions\":" + maxFunctions + ",\"decompile\":" + decompile +
@@ -190,6 +257,8 @@ public class RevscopeExport extends HeadlessScript {
 			",\"name_source\":" + json(nameSource(symbol)) +
 			",\"body_bytes\":" + function.getBody().getNumAddresses() +
 			",\"is_thunk\":" + function.isThunk() +
+			",\"is_external_entry_point\":" +
+			function.getProgram().getSymbolTable().isExternalEntryPoint(function.getEntryPoint()) +
 			",\"calling_convention\":" + nullableText(convention, MAX_LABEL_CHARS) +
 			",\"signature\":" + nullableText(signature, MAX_SIGNATURE_CHARS) + "}";
 	}

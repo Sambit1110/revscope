@@ -13,7 +13,7 @@ import {
 } from "../../../src/infrastructure/ghidra/exportProvider.js";
 import { testContext } from "../../support/context.js";
 import { ScriptedEngine, memoryRun, ok } from "../../support/engine.js";
-import { exportBytes, type ExportOptions } from "../../support/ghidraExport.js";
+import { exportBytes, exportRecords, type ExportOptions } from "../../support/ghidraExport.js";
 
 const ARTIFACT = "f".repeat(64);
 
@@ -128,6 +128,39 @@ describe("the Ghidra export provider", () => {
     expect(partial.map(({ operation }) => operation.name)).toEqual(["artifact_identity", "program_info", "list_functions", "decompile", "decompile"]);
     expect(unknownScopes(partial[2])).toContain("export");
     for (const record of partial) expect(parseEvidence(record).ok).toBe(true);
+  });
+
+  it("separates the header-declared program entry from Ghidra's other external entry points", async () => {
+    const records = recordsOf(await analyze());
+    expect(records[1]?.payload).toMatchObject({
+      program_entry: { source: "elf-header", addresses: ["0x401000"], reason: null },
+      external_entry_points: ["0x401000", "0x401010"],
+      other_external_entry_points: ["0x401010"],
+    });
+    const list = records[2];
+    if (list === undefined) throw new Error("no function list");
+    const { functions } = list.payload as { functions: { address: string; is_program_entry: boolean; is_external_entry_point: boolean }[] };
+    expect(functions.map(({ address, is_program_entry, is_external_entry_point }) => ({ address, is_program_entry, is_external_entry_point }))).toEqual([
+      { address: "0x401000", is_program_entry: true, is_external_entry_point: true },
+      // Marked by Ghidra as an external entry point (a global symbol), but not where execution starts.
+      { address: "0x401010", is_program_entry: false, is_external_entry_point: true },
+    ]);
+  });
+
+  it("reports an unavailable program entry with its reason and marks no function as the entry", async () => {
+    const [header, ...rest] = exportRecords();
+    const unavailable = {
+      ...header,
+      program: { ...(header as { program: object }).program, program_entry: { source: "unavailable", addresses: [], reason: "Revscope reads program entry points from ELF and Mach-O headers only." } },
+    };
+    const bytes = new TextEncoder().encode([unavailable, ...rest].map((record) => `${JSON.stringify(record)}\n`).join(""));
+    const parsed = parseGhidraExport(bytes, { maxFunctions: 200, decompile: true, ghidraVersion: "11.4" });
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.error));
+    const exportProvider = new GhidraExportProvider(parsed.value, { ghidraVersion: "11.4", artifactSha256: ARTIFACT, exportSha256: "e".repeat(64) });
+    const info = await exportProvider.read("program_info", {});
+    expect(info).toMatchObject({ status: "ok", payload: { program_entry: { source: "unavailable", addresses: [] }, other_external_entry_points: ["0x401000", "0x401010"] } });
+    const list = await exportProvider.read("list_functions", {});
+    expect(list.status === "ok" && (list.payload as { functions: { is_program_entry: boolean }[] }).functions.some(({ is_program_entry }) => is_program_entry)).toBe(false);
   });
 
   it("refuses mutations and unknown addresses", async () => {

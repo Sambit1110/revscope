@@ -12,7 +12,7 @@ import { err, ok, type Result } from "../../domain/result.js";
  * The export is untrusted input: it is produced by a large program that
  * parsed an untrusted binary. Everything is bounded and cross-checked here.
  */
-export const GHIDRA_EXPORT_SCHEMA = "revscope.ghidra-export/1";
+export const GHIDRA_EXPORT_SCHEMA = "revscope.ghidra-export/2";
 
 export const EXPORT_LIMITS = {
   /** Whole export, in bytes. */
@@ -44,7 +44,25 @@ const headerSchema = z.strictObject({
     image_base: address,
     min_address: address.nullable(),
     max_address: address.nullable(),
-    entry_points: z.array(address).max(EXPORT_LIMITS.entryPoints),
+    /**
+     * The entry point the file header declares, read with Ghidra's own format
+     * parsers (ELF e_entry, Mach-O LC_MAIN), or why it is unavailable.
+     */
+    program_entry: z
+      .strictObject({
+        source: z.enum(["elf-header", "macho-lc-main", "unavailable"]),
+        addresses: z.array(address).max(1),
+        reason: label(512).nullable(),
+      })
+      .refine(
+        (entry) =>
+          entry.source === "unavailable"
+            ? entry.addresses.length === 0 && entry.reason !== null
+            : entry.addresses.length === 1 && entry.reason === null,
+        "an available entry has one address and no reason; an unavailable one has a reason and no address",
+      ),
+    /** What Ghidra marks as external entry points: the program entry and exported or global symbols alike. */
+    external_entry_points: z.array(address).max(EXPORT_LIMITS.entryPoints),
   }),
   analysis: z.strictObject({
     timed_out: z.boolean(),
@@ -67,6 +85,7 @@ const functionSchema = z.strictObject({
   name_source: z.enum(NAME_SOURCES),
   body_bytes: z.number().int().nonnegative(),
   is_thunk: z.boolean(),
+  is_external_entry_point: z.boolean(),
   calling_convention: label(256).nullable(),
   signature: label(EXPORT_LIMITS.signatureChars).nullable(),
 });

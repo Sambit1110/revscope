@@ -129,7 +129,16 @@ export class GhidraExportProvider implements AnalysisProvider {
         return this.#ok(
           {
             ...header.program,
-            entry_points: [...header.program.entry_points],
+            program_entry: {
+              source: header.program.program_entry.source,
+              addresses: [...header.program.program_entry.addresses],
+              reason: header.program.program_entry.reason,
+            },
+            // Ghidra's external entry points other than the program entry: exported
+            // or global symbols, which are not where execution starts.
+            other_external_entry_points: header.program.external_entry_points.filter(
+              (address) => !header.program.program_entry.addresses.includes(address),
+            ),
             ghidra_version: header.ghidra_version,
             analysis_timed_out: header.analysis.timed_out,
             decompiler: header.analysis.decompiler,
@@ -146,6 +155,8 @@ export class GhidraExportProvider implements AnalysisProvider {
               name_source: entry.name_source,
               body_bytes: entry.body_bytes,
               is_thunk: entry.is_thunk,
+              is_program_entry: header.program.program_entry.addresses.includes(entry.address),
+              is_external_entry_point: entry.is_external_entry_point,
               calling_convention: entry.calling_convention,
               signature: entry.signature,
               decompilation: this.#state(entry.address),

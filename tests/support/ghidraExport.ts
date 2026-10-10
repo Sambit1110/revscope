@@ -22,7 +22,7 @@ export const DEFAULT_FUNCTIONS: NonNullable<ExportOptions["functions"]> = [
 
 export const headerRecord = (options: ExportOptions = {}) => ({
   type: "header",
-  schema: "revscope.ghidra-export/1",
+  schema: "revscope.ghidra-export/2",
   script_version: "1",
   ghidra_version: options.ghidraVersion ?? "11.4",
   program: {
@@ -35,7 +35,8 @@ export const headerRecord = (options: ExportOptions = {}) => ({
     image_base: "0x400000",
     min_address: "0x400000",
     max_address: "0x401fff",
-    entry_points: ["0x401000"],
+    program_entry: { source: "elf-header", addresses: ["0x401000"], reason: null },
+    external_entry_points: ["0x401000", "0x401010"],
   },
   analysis: {
     timed_out: options.analysisTimedOut ?? false,
@@ -51,6 +52,7 @@ export const functionRecord = (address: string, name: string) => ({
   name_source: "imported",
   body_bytes: 6,
   is_thunk: false,
+  is_external_entry_point: true,
   calling_convention: "__stdcall",
   signature: `int ${name}(void)`,
 });
