@@ -138,10 +138,11 @@ export class GhidraExportProvider implements AnalysisProvider {
 
   /** Display name, Ghidra's own name, aliases, and how the display name was chosen. */
   #naming(entry: ExportFunction): JsonObject {
+    const programEntry = this.#export.header.program.program_entry;
     const naming: FunctionNaming = chooseFunctionName(
       { name: entry.name, source: entry.name_source },
       entry.symbols,
-      this.#export.header.program.program_entry.addresses.includes(entry.address),
+      programEntry.addresses.includes(entry.address) ? { fileSymbols: programEntry.file_symbols } : null,
     );
     return { ...naming, aliases: naming.aliases.map((alias) => ({ ...alias })) };
   }
@@ -164,6 +165,7 @@ export class GhidraExportProvider implements AnalysisProvider {
             program_entry: {
               source: header.program.program_entry.source,
               addresses: [...header.program.program_entry.addresses],
+              file_symbols: header.program.program_entry.file_symbols === null ? null : [...header.program.program_entry.file_symbols],
               reason: header.program.program_entry.reason,
             },
             // Ghidra's external entry points other than the program entry: exported

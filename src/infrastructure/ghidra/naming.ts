@@ -24,16 +24,27 @@ export interface FunctionNaming {
   readonly name: string;
   /** Ghidra's source for the displayed name. */
   readonly name_source: NameSource;
-  /** Why this name was chosen. */
-  readonly name_basis: "ghidra-name" | "imported-alias";
+  /**
+   * Why this name was chosen:
+   * - ghidra-name: Ghidra's own name for the function;
+   * - imported-alias: another imported name at the address, preferred over
+   *   Ghidra's name;
+   * - loader-label: Ghidra's name, which its loader created for the program
+   *   entry; the file's symbol table has no name there.
+   */
+  readonly name_basis: "ghidra-name" | "imported-alias" | "loader-label";
   /**
    * - user-assigned: a person named it in Ghidra;
    * - imported: the only imported name at the address, or the symbol-table
    *   name beside Ghidra's loader entry label;
    * - ambiguous: several imported names, none preferable on the evidence;
-   * - generated: Ghidra made the name up; it does not come from the binary.
+   * - loader-generated: Ghidra's loader made the label (`entry`) while
+   *   importing; the binary does not contain it, even though Ghidra records
+   *   its source as imported;
+   * - generated: Ghidra made the name up during analysis; it does not come
+   *   from the binary.
    */
-  readonly name_confidence: "user-assigned" | "imported" | "ambiguous" | "generated";
+  readonly name_confidence: "user-assigned" | "imported" | "ambiguous" | "loader-generated" | "generated";
   /** Ghidra's current (primary) name, unchanged. */
   readonly ghidra_name: string;
   readonly ghidra_name_source: NameSource;
@@ -42,18 +53,39 @@ export interface FunctionNaming {
 }
 
 /**
- * Ghidra's loaders label the program entry point `entry` (seen on Mach-O
- * with Ghidra 12.1.4, beside the symbol-table name `_main`, both IMPORTED).
- * The label is only discounted where the evidence says it is that label: the
- * function is the header-declared program entry and exactly one other
- * imported name sits at the same address.
+ * Ghidra's ELF and Mach-O loaders label the program entry point `entry`,
+ * with source IMPORTED, whether or not the binary names it (seen with Ghidra
+ * 12.1.4 beside `_main` on Mach-O, and alone on stripped Mach-O and ELF).
  */
 const LOADER_ENTRY_LABEL = "entry";
+
+/**
+ * What is known about the function's address from the file header:
+ * - null: it is not the header-declared program entry;
+ * - fileSymbols: the names the file's own symbol tables define at the
+ *   program entry ([] for a stripped binary), or null if they were not read.
+ */
+export type ProgramEntryEvidence = { readonly fileSymbols: readonly string[] | null } | null;
+
+/**
+ * Whether Ghidra's `entry` here is its loader's label rather than a name from
+ * the binary. With the file's symbols read, that is decided by them; without
+ * them, only when exactly one other imported name sits at the entry (the
+ * Phase 4.3 rule).
+ */
+const isLoaderEntryLabel = (
+  ghidra: { readonly name: string; readonly source: NameSource },
+  entry: ProgramEntryEvidence,
+  importedOthers: readonly GhidraSymbol[],
+): boolean => {
+  if (entry === null || ghidra.name !== LOADER_ENTRY_LABEL || ghidra.source !== "imported") return false;
+  return entry.fileSymbols === null ? importedOthers.length === 1 : !entry.fileSymbols.includes(LOADER_ENTRY_LABEL);
+};
 
 export const chooseFunctionName = (
   ghidra: { readonly name: string; readonly source: NameSource },
   symbols: readonly GhidraSymbol[],
-  isProgramEntry: boolean,
+  entry: ProgramEntryEvidence,
 ): FunctionNaming => {
   const others = symbols.filter(({ name }) => name !== ghidra.name);
   const importedOthers = others.filter(({ source }) => source === "imported");
@@ -79,10 +111,18 @@ export const chooseFunctionName = (
 
   if (ghidra.source === "user") return result(ghidra, "ghidra-name", "user-assigned");
   const [onlyImportedOther] = importedOthers;
+  if (isLoaderEntryLabel(ghidra, entry, importedOthers)) {
+    // Prefer the binary's own name for the entry; the file's symbol table settles a choice between several.
+    const fileSymbols = entry?.fileSymbols ?? null;
+    const inFile = fileSymbols === null ? importedOthers : importedOthers.filter(({ name }) => fileSymbols.includes(name));
+    const [fileName] = inFile;
+    if (importedOthers.length === 1 && onlyImportedOther !== undefined) return result(onlyImportedOther, "imported-alias", "imported", true);
+    if (inFile.length === 1 && fileName !== undefined) return result(fileName, "imported-alias", "imported", true);
+    if (importedOthers.length === 0) return result(ghidra, "loader-label", "loader-generated");
+    return result(ghidra, "ghidra-name", "ambiguous");
+  }
   if (ghidra.source === "imported") {
     if (importedOthers.length === 0) return result(ghidra, "ghidra-name", "imported");
-    if (isProgramEntry && ghidra.name === LOADER_ENTRY_LABEL && importedOthers.length === 1 && onlyImportedOther !== undefined)
-      return result(onlyImportedOther, "imported-alias", "imported", true);
     return result(ghidra, "ghidra-name", "ambiguous");
   }
   // Ghidra made this name up (default, analysis, ai, other); an imported name, if unique, is better evidence.

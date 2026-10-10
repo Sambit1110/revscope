@@ -118,6 +118,7 @@ export const planHeadless = (options: {
 /** Engine failures recognised from Ghidra's output. The text itself is never reported. */
 export type HeadlessFailure =
   | "unsupported_format"
+  | "malformed_input"
   | "java_runtime"
   | "export_script_failed"
   | "import_failed"
@@ -130,6 +131,12 @@ export type HeadlessFailure =
  */
 export const classifyHeadlessOutput = (text: string): HeadlessFailure => {
   if (/No load spec found/iu.test(text)) return "unsupported_format";
+  // A loader accepted the format but found nothing it could load from the
+  // file: Ghidra 12.1.4 reports this for a truncated ELF ("No memory blocks
+  // were defined", after "N of N program headers are truncated/missing from
+  // file"). Both depend only on the file's bytes, so retrying cannot help.
+  if (/No memory blocks were defined for file/iu.test(text) || (/truncated\/missing from file/iu.test(text) && /Import failed/iu.test(text)))
+    return "malformed_input";
   if (/could not be found and must be manually chosen|Unable to prompt user for JDK path|Failed to find a supported JDK|unsupported JDK|not a supported JDK/iu.test(text))
     return "java_runtime";
   if (/Script not found|Failed to compile|Unable to compile|script error|GhidraScript.*(?:failed|error)/iu.test(text))

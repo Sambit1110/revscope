@@ -12,7 +12,7 @@
 //   0x0e0 .strtab             0x0ee .shstrtab
 //   0x110 section headers (null, .text, .symtab, .strtab, .shstrtab)
 //
-// Usage: node make-elf.mjs <output path>   (or import { makeElf })
+// Usage: node make-elf.mjs <output path>   (or import { makeElf, makeStrippedElf })
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -98,6 +98,23 @@ export const makeElf = () => {
   section(3, { name: shName(".strtab"), type: 3, ...STRTAB, align: 1n });
   section(4, { name: shName(".shstrtab"), type: 3, ...SHSTRTAB, align: 1n });
   return file;
+};
+
+/**
+ * The same file as `strip` would leave it: .symtab and .strtab dropped, .text
+ * and .shstrtab kept (.shstrtab still names the removed sections, which is
+ * harmless). Code, program header and entry point are unchanged.
+ */
+export const makeStrippedElf = () => {
+  const full = makeElf();
+  const out = Buffer.alloc(SECTION_HEADERS + 3 * 64);
+  full.copy(out, 0, 0, SECTION_HEADERS);
+  out.fill(0, SYMTAB.offset, SECTION_HEADERS); // .symtab and .strtab contents
+  // Section headers kept: null, .text, .shstrtab.
+  [0, 1, 4].forEach((from, to) => full.copy(out, SECTION_HEADERS + to * 64, SECTION_HEADERS + from * 64, SECTION_HEADERS + (from + 1) * 64));
+  out.writeUInt16LE(3, 60); // e_shnum
+  out.writeUInt16LE(2, 62); // e_shstrndx: .shstrtab is now section 2
+  return out;
 };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

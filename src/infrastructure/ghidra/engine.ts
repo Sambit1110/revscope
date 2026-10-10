@@ -276,6 +276,14 @@ export class GhidraEngine implements BinaryAnalysisEngine {
     switch (trace.classification) {
       case "unsupported_format":
         return err(makeError("unsupported_target", "Ghidra could not recognize the file as a supported program", { path: request.path }));
+      case "malformed_input":
+        // Not a provider failure: the same bytes fail the same way, so the error is not retryable.
+        return err(
+          makeError("unsupported_target", "Ghidra recognized the file's format but could not load it; the file appears truncated or malformed", {
+            path: request.path,
+            reason: "malformed_input",
+          }),
+        );
       case "java_runtime":
         return err(notConfigured("java_runtime", "Ghidra could not find a Java runtime it supports"));
       case "export_script_failed":

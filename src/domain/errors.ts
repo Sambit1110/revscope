@@ -55,7 +55,7 @@ export const ERROR_CATALOG = {
     category: "unsupported",
     retryable: false,
     remediation:
-      "Select a regular file. Directories, devices, sockets, and symbolic links are not inspected.",
+      "Select a regular file in a supported format. Directories, devices, sockets, and symbolic links are not inspected, and truncated or malformed files cannot be analyzed; retrying the same file will not help.",
   },
   target_not_found: {
     category: "not_found",

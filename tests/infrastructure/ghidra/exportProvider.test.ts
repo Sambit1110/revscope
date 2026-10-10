@@ -147,11 +147,38 @@ describe("the Ghidra export provider", () => {
     ]);
   });
 
+  it("labels Ghidra's `entry` on a stripped binary as a loader label, not an imported name", async () => {
+    // Regression (Phase 4.4 benchmark): the stripped Mach-O and stripped generated ELF showed entry as imported.
+    const [header, ...rest] = exportRecords({
+      functions: [{ address: "0x401000", name: "entry", decompilation: { status: "ok", pseudocode: "void entry(void)\n{\n  return;\n}\n" } }],
+    });
+    const stripped = {
+      ...header,
+      program: { ...(header as { program: object }).program, program_entry: { source: "elf-header", addresses: ["0x401000"], file_symbols: [], reason: null } },
+    };
+    const bytes = new TextEncoder().encode([stripped, ...rest].map((record) => `${JSON.stringify(record)}\n`).join(""));
+    const parsed = parseGhidraExport(bytes, { maxFunctions: 200, decompile: true, ghidraVersion: "11.4" });
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.error));
+    const exportProvider = new GhidraExportProvider(parsed.value, { ghidraVersion: "11.4", artifactSha256: ARTIFACT, exportSha256: "e".repeat(64) });
+    const info = await exportProvider.read("program_info", {});
+    expect(info).toMatchObject({ status: "ok", payload: { address_placement: "file-declared", program_entry: { file_symbols: [] } } });
+    const list = await exportProvider.read("list_functions", {});
+    const [entry] = list.status === "ok" ? (list.payload as { functions: Record<string, unknown>[] }).functions : [];
+    expect(entry).toMatchObject({
+      name: "entry",
+      name_source: "imported",
+      name_basis: "loader-label",
+      name_confidence: "loader-generated",
+      ghidra_name: "entry",
+      is_program_entry: true,
+    });
+  });
+
   it("reports an unavailable program entry with its reason and marks no function as the entry", async () => {
     const [header, ...rest] = exportRecords();
     const unavailable = {
       ...header,
-      program: { ...(header as { program: object }).program, program_entry: { source: "unavailable", addresses: [], reason: "Revscope reads program entry points from ELF and Mach-O headers only." } },
+      program: { ...(header as { program: object }).program, program_entry: { source: "unavailable", addresses: [], file_symbols: null, reason: "Revscope reads program entry points from ELF and Mach-O headers only." } },
     };
     const bytes = new TextEncoder().encode([unavailable, ...rest].map((record) => `${JSON.stringify(record)}\n`).join(""));
     const parsed = parseGhidraExport(bytes, { maxFunctions: 200, decompile: true, ghidraVersion: "11.4" });

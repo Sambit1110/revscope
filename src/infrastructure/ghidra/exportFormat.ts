@@ -13,7 +13,7 @@ import { NAME_SOURCES } from "./naming.js";
  * The export is untrusted input: it is produced by a large program that
  * parsed an untrusted binary. Everything is bounded and cross-checked here.
  */
-export const GHIDRA_EXPORT_SCHEMA = "revscope.ghidra-export/2";
+export const GHIDRA_EXPORT_SCHEMA = "revscope.ghidra-export/3";
 
 export const EXPORT_LIMITS = {
   /** Whole export, in bytes. */
@@ -26,6 +26,17 @@ export const EXPORT_LIMITS = {
   signatureChars: 4_096,
   entryPoints: 256,
 } as const;
+
+/**
+ * - file-declared: addresses are those the file declares (executables loaded
+ *   at their own base);
+ * - rebased: Ghidra loaded the program at a base other than the file's;
+ * - relocatable-object: the file has no load address (ELF ET_REL, Mach-O
+ *   MH_OBJECT); Ghidra chose where to place it, so addresses are Ghidra's,
+ *   not the file's;
+ * - unknown: the header could not be read, or the format is not ELF or Mach-O.
+ */
+export const ADDRESS_PLACEMENTS = ["file-declared", "rebased", "relocatable-object", "unknown"] as const;
 
 const address = z.string().regex(/^0x[0-9a-f]{1,32}$/, "Must be a lowercase hexadecimal address");
 const label = (max: number) => z.string().min(1).max(max);
@@ -43,28 +54,45 @@ const headerSchema = z.strictObject({
     endian: z.enum(["little", "big"]),
     address_size: z.number().int().min(1).max(128),
     image_base: address,
+    /**
+     * Where the program's addresses come from (see ADDRESS_PLACEMENTS).
+     */
+    address_placement: z.enum(ADDRESS_PLACEMENTS),
+    /**
+     * The lowest and highest address of memory Ghidra loaded from the file
+     * into its default address space; null when there is none. Non-loaded
+     * sections and Ghidra's synthetic EXTERNAL block are excluded.
+     */
     min_address: address.nullable(),
     max_address: address.nullable(),
     /**
      * The entry point the file header declares, read with Ghidra's own format
      * parsers (ELF e_entry, Mach-O LC_MAIN), or why it is unavailable.
+     * file_symbols: the names the file's own symbol tables define at that
+     * address ([] when none, e.g. a stripped binary); null when the entry is
+     * unavailable.
      */
     program_entry: z
       .strictObject({
         source: z.enum(["elf-header", "macho-lc-main", "unavailable"]),
         addresses: z.array(address).max(1),
+        file_symbols: z.array(label(EXPORT_LIMITS.nameChars)).max(16).nullable(),
         reason: label(512).nullable(),
       })
       .refine(
         (entry) =>
           entry.source === "unavailable"
-            ? entry.addresses.length === 0 && entry.reason !== null
-            : entry.addresses.length === 1 && entry.reason === null,
-        "an available entry has one address and no reason; an unavailable one has a reason and no address",
+            ? entry.addresses.length === 0 && entry.reason !== null && entry.file_symbols === null
+            : entry.addresses.length === 1 && entry.reason === null && entry.file_symbols !== null,
+        "an available entry has one address, its file symbols and no reason; an unavailable one has a reason only",
       ),
     /** What Ghidra marks as external entry points: the program entry and exported or global symbols alike. */
     external_entry_points: z.array(address).max(EXPORT_LIMITS.entryPoints),
-  }),
+  }).refine(
+    ({ min_address: min, max_address: max }) =>
+      min === null || max === null ? min === max : BigInt(min) <= BigInt(max),
+    "the loaded address range must have both bounds, min at or below max, or neither",
+  ),
   analysis: z.strictObject({
     timed_out: z.boolean(),
     /** Whether Ghidra's native decompiler could start; on macOS it must be built locally. */

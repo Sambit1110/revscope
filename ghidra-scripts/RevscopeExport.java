@@ -1,6 +1,6 @@
 // Revscope export script for Ghidra headless analysis.
 //
-// Writes the revscope.ghidra-export/1 format that Revscope validates in
+// Writes the revscope.ghidra-export/3 format that Revscope validates in
 // src/infrastructure/ghidra/exportFormat.ts: one JSON record per line, a
 // header, function records each followed by an optional decompilation
 // record, and a trailer. Every line is flushed as it is written, so a run
@@ -23,6 +23,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 
 import ghidra.app.decompiler.ClangCommentToken;
@@ -34,9 +35,14 @@ import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.decompiler.DecompiledFunction;
 import ghidra.app.util.bin.FileBytesProvider;
 import ghidra.app.util.bin.format.elf.ElfHeader;
+import ghidra.app.util.bin.format.elf.ElfSymbol;
+import ghidra.app.util.bin.format.elf.ElfSymbolTable;
 import ghidra.app.util.bin.format.macho.MachHeader;
+import ghidra.app.util.bin.format.macho.MachHeaderFileTypes;
 import ghidra.app.util.bin.format.macho.commands.EntryPointCommand;
+import ghidra.app.util.bin.format.macho.commands.NList;
 import ghidra.app.util.bin.format.macho.commands.SegmentCommand;
+import ghidra.app.util.bin.format.macho.commands.SymbolTableCommand;
 import ghidra.app.util.headless.HeadlessScript;
 import ghidra.app.util.opinion.ElfLoader;
 import ghidra.app.util.opinion.MachoLoader;
@@ -48,19 +54,23 @@ import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
 
 public class RevscopeExport extends HeadlessScript {
 
-	private static final String SCHEMA = "revscope.ghidra-export/2";
-	private static final String SCRIPT_VERSION = "2";
+	private static final String SCHEMA = "revscope.ghidra-export/3";
+	private static final String SCRIPT_VERSION = "3";
 	private static final int MAX_NAME_CHARS = 1024;
 	private static final int MAX_SIGNATURE_CHARS = 4096;
 	private static final int MAX_LABEL_CHARS = 256;
 	private static final int MAX_ENTRY_POINTS = 256;
 	private static final int MAX_SYMBOLS = 16;
+	/** ELF symbol types that name sections and source files rather than code or data. */
+	private static final int STT_SECTION = 3;
+	private static final int STT_FILE = 4;
 	private static final int MAX_WARNINGS = 32;
 	private static final int MAX_WARNING_CHARS = 1024;
 	/** Revscope refuses record lines over 256 KiB; stay well below. */
@@ -162,17 +172,23 @@ public class RevscopeExport extends HeadlessScript {
 	}
 
 	/**
-	 * The program's entry point as its file header declares it, read with the
-	 * same Ghidra format parsers the loaders use, over the original file bytes.
-	 * Ghidra's "external entry points" also include exported symbols, so they
-	 * cannot tell the program entry apart; the header can. Only ELF e_entry and
-	 * Mach-O LC_MAIN are read; anything else is reported as unavailable.
+	 * What the file header itself declares, read with the same Ghidra format
+	 * parsers the loaders use, over the original file bytes:
+	 * - the program entry point (ELF e_entry, Mach-O LC_MAIN). Ghidra's
+	 *   "external entry points" also include exported symbols, so they cannot
+	 *   tell the program entry apart; the header can;
+	 * - the names the file's own symbol tables define at that entry, so a
+	 *   label Ghidra's loader made up (e.g. "entry") is not mistaken for one
+	 *   read from the binary;
+	 * - where the addresses come from (address_placement).
+	 * Returns { program_entry JSON, address_placement JSON }.
 	 */
-	private String programEntry(Program program) {
+	private String[] headerFacts(Program program) {
 		String format = program.getExecutableFormat();
 		List<FileBytes> files = program.getMemory().getAllFileBytes();
 		if (files.isEmpty()) {
-			return entryJson("unavailable", null, "Ghidra holds no original file bytes for this program.");
+			return new String[] { entryJson("unavailable", null, null, "Ghidra holds no original file bytes for this program."),
+				json("unknown") };
 		}
 		FileBytesProvider bytes = new FileBytesProvider(files.get(0));
 		AddressSpace space = program.getAddressFactory().getDefaultAddressSpace();
@@ -181,41 +197,125 @@ public class RevscopeExport extends HeadlessScript {
 			if (ElfLoader.ELF_NAME.equals(format)) {
 				ElfHeader elf = new ElfHeader(bytes, message -> {});
 				elf.parse();
+				String placement = json(elf.isRelocatable() ? "relocatable-object"
+						: imageBase == elf.getImageBase() ? "file-declared" : "rebased");
 				if (elf.e_entry() == 0) {
-					return entryJson("unavailable", null, "The ELF header declares no entry point.");
+					return new String[] { entryJson("unavailable", null, null, "The ELF header declares no entry point."), placement };
 				}
 				// Ghidra may load a position-independent file at another base.
-				return entryAt(program, space.getAddress(elf.e_entry() + (imageBase - elf.getImageBase())), "elf-header");
+				Address entry = space.getAddress(elf.e_entry() + (imageBase - elf.getImageBase()));
+				return new String[] { entryAt(program, entry, "elf-header", elfSymbolsAt(elf, elf.e_entry())), placement };
 			}
 			if (MachoLoader.MACH_O_NAME.equals(format)) {
 				MachHeader mach = new MachHeader(bytes).parse();
-				List<EntryPointCommand> mains = mach.getLoadCommands(EntryPointCommand.class);
 				SegmentCommand text = mach.getSegment("__TEXT");
+				String placement = json(mach.getFileType() == MachHeaderFileTypes.MH_OBJECT ? "relocatable-object"
+						: text == null ? "unknown" : imageBase == text.getVMaddress() ? "file-declared" : "rebased");
+				List<EntryPointCommand> mains = mach.getLoadCommands(EntryPointCommand.class);
 				if (mains.isEmpty() || text == null) {
-					return entryJson("unavailable", null,
-						"The Mach-O file has no LC_MAIN entry point; other entry forms are not read.");
+					return new String[] { entryJson("unavailable", null, null,
+						"The Mach-O file has no LC_MAIN entry point; other entry forms are not read."), placement };
 				}
-				long slide = imageBase - text.getVMaddress();
-				long entry = text.getVMaddress() + mains.get(0).getEntryOffset() - text.getFileOffset() + slide;
-				return entryAt(program, space.getAddress(entry), "macho-lc-main");
+				long declared = text.getVMaddress() + mains.get(0).getEntryOffset() - text.getFileOffset();
+				Address entry = space.getAddress(declared + (imageBase - text.getVMaddress()));
+				return new String[] { entryAt(program, entry, "macho-lc-main", machoSymbolsAt(mach, declared)), placement };
 			}
-			return entryJson("unavailable", null,
-				"Revscope reads program entry points from ELF and Mach-O headers only.");
+			return new String[] { entryJson("unavailable", null, null,
+				"Revscope reads program entry points from ELF and Mach-O headers only."), json("unknown") };
 		}
 		catch (Exception e) {
-			return entryJson("unavailable", null,
-				"Ghidra's format parser could not read the header (" + e.getClass().getSimpleName() + ").");
+			return new String[] { entryJson("unavailable", null, null,
+				"Ghidra's format parser could not read the header (" + e.getClass().getSimpleName() + ")."), json("unknown") };
 		}
 	}
 
-	private static String entryAt(Program program, Address entry, String source) {
-		return program.getMemory().contains(entry) ? entryJson(source, entry, null)
-				: entryJson("unavailable", null, "The header's entry point lies outside the loaded program.");
+	/** Names the ELF file's symbol tables (.symtab and .dynsym) define at a file address. */
+	private static List<String> elfSymbolsAt(ElfHeader elf, long value) {
+		List<String> names = new ArrayList<>();
+		for (ElfSymbolTable table : elf.getSymbolTables()) {
+			for (ElfSymbol symbol : table.getSymbols()) {
+				String name = symbol.getNameAsString();
+				if (name == null || name.isEmpty() || symbol.getSectionHeaderIndex() == 0 ||
+					symbol.getType() == STT_SECTION || symbol.getType() == STT_FILE || symbol.getValue() != value) {
+					continue;
+				}
+				addName(names, name);
+			}
+		}
+		return names;
 	}
 
-	private static String entryJson(String source, Address entry, String reason) {
+	/** Names the Mach-O file's LC_SYMTAB defines at a file address; none when it has no symbol table. */
+	private static List<String> machoSymbolsAt(MachHeader mach, long value) {
+		List<String> names = new ArrayList<>();
+		SymbolTableCommand table = mach.getFirstLoadCommand(SymbolTableCommand.class);
+		if (table == null) {
+			return names;
+		}
+		for (NList symbol : table.getSymbols()) {
+			String name = symbol.getString();
+			if (name == null || name.isEmpty() || symbol.isTypeUndefined() || symbol.isSymbolicDebugging() ||
+				symbol.getValue() != value) {
+				continue;
+			}
+			addName(names, name);
+		}
+		return names;
+	}
+
+	private static void addName(List<String> names, String name) {
+		String bounded = truncate(name, MAX_NAME_CHARS);
+		if (names.size() < MAX_SYMBOLS && !names.contains(bounded)) {
+			names.add(bounded);
+		}
+	}
+
+	/**
+	 * The lowest and highest address of the memory Ghidra loaded from the file
+	 * into the default address space. Blocks Ghidra keeps for non-loaded
+	 * sections (section headers, symbol and string tables) live in other
+	 * address spaces whose offsets restart at zero, and Ghidra's synthetic
+	 * EXTERNAL block holds placeholder addresses for imports; neither is part
+	 * of the loaded image. Null when there is no such memory.
+	 */
+	private static Address[] loadedRange(Program program) {
+		AddressSpace space = program.getAddressFactory().getDefaultAddressSpace();
+		Address min = null;
+		Address max = null;
+		for (MemoryBlock block : program.getMemory().getBlocks()) {
+			if (!block.isLoaded() || block.isExternalBlock() || block.isOverlay() ||
+				!block.getStart().getAddressSpace().equals(space)) {
+				continue;
+			}
+			if (min == null || block.getStart().compareTo(min) < 0) {
+				min = block.getStart();
+			}
+			if (max == null || block.getEnd().compareTo(max) > 0) {
+				max = block.getEnd();
+			}
+		}
+		return new Address[] { min, max };
+	}
+
+	private static String entryAt(Program program, Address entry, String source, List<String> fileSymbols) {
+		return program.getMemory().contains(entry) ? entryJson(source, entry, fileSymbols, null)
+				: entryJson("unavailable", null, null, "The header's entry point lies outside the loaded program.");
+	}
+
+	private static String entryJson(String source, Address entry, List<String> fileSymbols, String reason) {
+		StringBuilder symbols = new StringBuilder();
+		if (fileSymbols == null) {
+			symbols.append("null");
+		}
+		else {
+			symbols.append("[");
+			for (int i = 0; i < fileSymbols.size(); i++) {
+				symbols.append(i == 0 ? "" : ",").append(json(fileSymbols.get(i)));
+			}
+			symbols.append("]");
+		}
 		return "{\"source\":" + json(source) + ",\"addresses\":" + (entry == null ? "[]" : "[" + json(hex(entry)) + "]") +
-			",\"reason\":" + (reason == null ? "null" : json(reason)) + "}";
+			",\"file_symbols\":" + symbols + ",\"reason\":" + (reason == null ? "null" : json(reason)) + "}";
 	}
 
 	// analysisTimeoutOccurred() declares the checked ImproperUseException.
@@ -234,6 +334,8 @@ public class RevscopeExport extends HeadlessScript {
 		}
 		entries.append("]");
 		String format = program.getExecutableFormat();
+		String[] facts = headerFacts(program);
+		Address[] range = loadedRange(program);
 		return "{\"type\":\"header\",\"schema\":" + json(SCHEMA) +
 			",\"script_version\":" + json(SCRIPT_VERSION) +
 			",\"ghidra_version\":" + json(Application.getApplicationVersion()) +
@@ -246,9 +348,10 @@ public class RevscopeExport extends HeadlessScript {
 			",\"endian\":" + json(program.getLanguage().isBigEndian() ? "big" : "little") +
 			",\"address_size\":" + program.getAddressFactory().getDefaultAddressSpace().getSize() +
 			",\"image_base\":" + json(hex(program.getImageBase())) +
-			",\"min_address\":" + nullableAddress(program.getMinAddress()) +
-			",\"max_address\":" + nullableAddress(program.getMaxAddress()) +
-			",\"program_entry\":" + programEntry(program) +
+			",\"address_placement\":" + facts[1] +
+			",\"min_address\":" + nullableAddress(range[0]) +
+			",\"max_address\":" + nullableAddress(range[1]) +
+			",\"program_entry\":" + facts[0] +
 			",\"external_entry_points\":" + entries + "}" +
 			",\"analysis\":{\"timed_out\":" + analysisTimeoutOccurred() +
 			",\"decompiler\":" + json(decompilerState) + "}" +

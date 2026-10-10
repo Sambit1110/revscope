@@ -18,6 +18,17 @@ const TOLERANCE_MS = 250;
 /** Long enough for the fake to start and write a partial export even in a loaded run. */
 const PARTIAL_RUN_MS = 2_000;
 
+/** Ghidra 12.1.4's console output for an ELF cut to 100 bytes (paths removed), from the Phase 4.4 benchmark. */
+const TRUNCATED_ELF_OUTPUT = [
+  "INFO  Using Loader: Executable and Linking Format (ELF) (ProgramLoader)",
+  "1 of 1 program headers are truncated/missing from file",
+  "5 of 5 section headers are truncated/missing from file",
+  "Skipping zero-length segment [0,Loadable segment] at address ram:00000000",
+  "ERROR REPORT: Error: No memory blocks were defined for file file:///input (HeadlessAnalyzer)",
+  "ERROR REPORT: Import failed for file: file:///input (HeadlessAnalyzer)",
+  "",
+].join("\n");
+
 const owned: number[] = [];
 afterEach(() => {
   for (const pid of owned.splice(0))
@@ -231,6 +242,7 @@ describe.skipIf(!posix)("Ghidra engine with a fake analyzeHeadless", () => {
       ["an unrecognised file format", { mode: "say", stdout: "ERROR REPORT: No load spec found for import file: /private/input\n" }, "unsupported_target", null],
       ["a failing export script", { mode: "say", stdout: "ERROR REPORT: Failed to compile script RevscopeExport.java\n" }, "provider_failure", "export_script_failed"],
       ["a failed import", { mode: "say", stdout: "ERROR REPORT: Import failed for file\n", exitCode: 0 }, "provider_failure", "import_failed"],
+      ["a truncated file", { mode: "say", stdout: TRUNCATED_ELF_OUTPUT, exitCode: 0 }, "unsupported_target", "malformed_input"],
       ["a silent crash", { mode: "say", exitCode: 3 }, "provider_failure", "engine_failed"],
     ] as const)("classifies %s", async (_label, control, code, reason) => {
       const { result } = await analyze(control);
@@ -238,6 +250,21 @@ describe.skipIf(!posix)("Ghidra engine with a fake analyzeHeadless", () => {
       expect(error.code).toBe(code);
       if (reason !== null) expect(error.details["reason"]).toBe(reason);
       expect(error.details["cleanup"]).toMatchObject({ workspace: "removed" });
+    });
+
+    it("does not recommend retrying a truncated file, but keeps other import failures retryable", async () => {
+      // Regression (Phase 4.4 benchmark): a truncated ELF came back as a retryable provider_failure.
+      const truncated = failure((await analyze({ mode: "say", stdout: TRUNCATED_ELF_OUTPUT, exitCode: 0 })).result);
+      expect(truncated).toMatchObject({ code: "unsupported_target", retryable: false, details: { reason: "malformed_input" } });
+      expect(truncated.remediation.action).toContain("retrying the same file will not help");
+      const noBlocks = failure((await analyze({ mode: "say", stdout: "ERROR REPORT: Error: No memory blocks were defined for file file:///x\n", exitCode: 0 })).result);
+      expect(noBlocks).toMatchObject({ code: "unsupported_target", retryable: false });
+      // Without evidence about the file itself, an import failure stays a retryable provider failure.
+      const unexplained = failure((await analyze({ mode: "say", stdout: "ERROR REPORT: Import failed for file\n", exitCode: 0 })).result);
+      expect(unexplained).toMatchObject({ code: "provider_failure", retryable: true, details: { reason: "import_failed" } });
+      // Truncation notes alone, without a failed import, are not a verdict on the file.
+      const recovered = failure((await analyze({ mode: "say", stdout: "1 of 1 program headers are truncated/missing from file\n", exitCode: 3 })).result);
+      expect(recovered).toMatchObject({ code: "provider_failure", details: { reason: "engine_failed" } });
     });
 
     it("never repeats engine output, host paths or secrets in errors", async () => {

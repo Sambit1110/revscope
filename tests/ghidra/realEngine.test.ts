@@ -22,7 +22,7 @@ import { createToolContext } from "../../src/composition.js";
 import type { Evidence } from "../../src/domain/evidence.js";
 import { DEFAULT_SCRIPT_DIR, GhidraEngine } from "../../src/infrastructure/ghidra/engine.js";
 import { serveMcp } from "../../src/interfaces/mcp.js";
-import { makeElf } from "../fixtures/binaries/make-elf.mjs";
+import { makeElf, makeStrippedElf } from "../fixtures/binaries/make-elf.mjs";
 import { BIN, REPO_ROOT, tempDir } from "../support/context.js";
 
 const ghidraDir = process.env["REVSCOPE_GHIDRA_DIR"];
@@ -60,6 +60,33 @@ const machoFixture = async () => {
   const compiled = spawnSync("clang", ["-arch", "arm64", "-O0", "-o", path, MACHO_SOURCE], { encoding: "utf8", timeout: 120_000 });
   if (compiled.status !== 0)
     throw new Error(`The Mach-O fixture needs clang from the Xcode command-line tools: ${compiled.error?.message ?? compiled.stderr}`);
+  await chmod(path, 0o644);
+  return path;
+};
+
+/** The generated ELF without .symtab and .strtab, as `strip` would leave it. */
+const strippedFixture = async () => {
+  const path = join(await tempDir(), "stripped.elf");
+  await writeFile(path, makeStrippedElf());
+  return path;
+};
+
+/** The Mach-O fixture after `strip`: only the header symbol and imports remain. */
+const strippedMachoFixture = async () => {
+  const full = await machoFixture();
+  const path = `${full}.stripped`;
+  const stripped = spawnSync("strip", ["-o", path, full], { encoding: "utf8", timeout: 120_000 });
+  if (stripped.status !== 0) throw new Error(`strip from the Xcode command-line tools is needed: ${stripped.error?.message ?? stripped.stderr}`);
+  await chmod(path, 0o644);
+  return path;
+};
+
+/** The ELF object fixture, compiled (never linked or run) for one target. */
+const OBJECT_SOURCE = fileURLToPath(new URL("../fixtures/binaries/elf-object/object.c", import.meta.url));
+const objectFixture = async (target: string) => {
+  const path = join(await tempDir(), `object-${target}.o`);
+  const compiled = spawnSync("clang", ["-target", target, "-c", "-O0", "-ffreestanding", "-o", path, OBJECT_SOURCE], { encoding: "utf8", timeout: 120_000 });
+  if (compiled.status !== 0) throw new Error(`The ELF object fixture needs clang: ${compiled.error?.message ?? compiled.stderr}`);
   await chmod(path, 0o644);
   return path;
 };
@@ -295,11 +322,74 @@ describe("Ghidra real-engine verification: entry points (ELF)", () => {
   it("reports the header-declared entry separately from Ghidra's other external entry points", async () => {
     settings();
     const { info, at } = parts(await analyze(await fixture()));
-    expect(info["program_entry"]).toEqual({ source: "elf-header", addresses: ["0x400080"], reason: null });
+    expect(info["program_entry"]).toEqual({ source: "elf-header", addresses: ["0x400080"], file_symbols: ["answer"], reason: null });
     expect(info["other_external_entry_points"]).toEqual(["0x400090"]);
     expect(at("0x400080")).toMatchObject({ name: "answer", is_program_entry: true, is_external_entry_point: true });
     // A global symbol Ghidra marks as an external entry point is not the program entry.
     expect(at("0x400090")).toMatchObject({ name: "twice", is_program_entry: false, is_external_entry_point: true });
+  });
+
+  it("reports the loaded range of the file's single PT_LOAD, not an unloaded section's space", async () => {
+    // Regression (Phase 4.4 benchmark): max_address was 0x13f, an offset in the section-header block's own space.
+    settings();
+    const { info } = parts(await analyze(await fixture()));
+    expect(info).toMatchObject({ address_placement: "file-declared", image_base: "0x400000", min_address: "0x400000", max_address: "0x400093" });
+  });
+
+  it("labels Ghidra's `entry` in a stripped ELF as a loader label, not an imported name", async () => {
+    // Regression (Phase 4.4 benchmark): the stripped generated ELF reported entry with name_confidence imported.
+    settings();
+    const { info, at, functions } = parts(await analyze(await strippedFixture()));
+    expect(info["program_entry"]).toEqual({ source: "elf-header", addresses: ["0x400080"], file_symbols: [], reason: null });
+    expect(at("0x400080")).toMatchObject({
+      name: "entry",
+      name_source: "imported",
+      name_basis: "loader-label",
+      name_confidence: "loader-generated",
+      ghidra_name: "entry",
+      aliases: [],
+      is_program_entry: true,
+    });
+    expect(functions.filter(({ name_confidence: confidence }) => confidence === "imported")).toEqual([]);
+    expect(info).toMatchObject({ min_address: "0x400000", max_address: "0x400093" });
+  });
+
+  it("refuses a truncated ELF as a malformed input and does not recommend retrying it", async () => {
+    // Regression (Phase 4.4 benchmark): this was a retryable provider_failure (import_failed).
+    settings();
+    const path = join(await tempDir(), "truncated.elf");
+    await writeFile(path, makeElf().subarray(0, 100));
+    const output = await analyze(path);
+    if (output.ok) throw new Error("a truncated ELF was analyzed");
+    expect(output.error).toMatchObject({
+      code: "unsupported_target",
+      retryable: false,
+      details: { reason: "malformed_input", cleanup: { workspace: "removed" } },
+    });
+  });
+});
+
+// The object fixture is compiled for Linux targets with clang; this toolchain cannot link ELF executables.
+describe.runIf(process.platform === "darwin")("Ghidra real-engine verification: ELF relocatable objects", () => {
+  it.each(["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"])("reports %s object addresses as Ghidra's placement, within the loaded range", async (target) => {
+    // Regression (Phase 4.4 benchmark): max_address was 0x1ff, below min_address 0x100000.
+    settings();
+    const path = await objectFixture(target);
+    const { info, functions } = parts(await analyze(path));
+    expect(info).toMatchObject({
+      address_placement: "relocatable-object",
+      program_entry: { source: "unavailable", addresses: [], file_symbols: null },
+    });
+    const min = BigInt(info["min_address"] as string);
+    const max = BigInt(info["max_address"] as string);
+    expect(min).toBe(BigInt(info["image_base"] as string));
+    expect(max >= min).toBe(true);
+    // Loaded content comes from the object's own bytes, so it cannot exceed the file's size.
+    expect(max - min).toBeLessThan(BigInt((await stat(path)).size));
+    expect(functions.map(({ name }) => name)).toEqual(expect.arrayContaining(["add", "scale"]));
+    for (const { address } of functions) {
+      expect(BigInt(address) >= min && BigInt(address) <= max, address).toBe(true);
+    }
   });
 });
 
@@ -373,7 +463,9 @@ describe.runIf(process.platform === "darwin")("Ghidra real-engine verification: 
   it("reads the LC_MAIN entry and does not treat exported symbols or the header as entry points", async () => {
     settings();
     const { info, at, functions } = parts(await analyze(await machoFixture()));
-    expect(info["program_entry"]).toEqual({ source: "macho-lc-main", addresses: ["0x1000004e0"], reason: null });
+    expect(info["program_entry"]).toEqual({ source: "macho-lc-main", addresses: ["0x1000004e0"], file_symbols: ["_main"], reason: null });
+    expect(info).toMatchObject({ address_placement: "file-declared", min_address: "0x100000000" });
+    expect(BigInt(info["max_address"] as string) > BigInt("0x1000004e0")).toBe(true);
     // Exported symbols (_add, _factorial) and the Mach-O header symbol are external entry points, not program entries.
     expect(info["other_external_entry_points"]).toEqual(expect.arrayContaining(["0x100000000", "0x100000460", "0x100000480"]));
     expect(info["other_external_entry_points"]).not.toContain("0x1000004e0");
@@ -381,6 +473,18 @@ describe.runIf(process.platform === "darwin")("Ghidra real-engine verification: 
     expect(at("0x100000460")).toMatchObject({ is_program_entry: false, is_external_entry_point: true });
     // A file-local (non-exported) function is neither.
     expect(at("0x100000514")).toMatchObject({ is_program_entry: false, is_external_entry_point: false });
+  });
+
+  it("labels Ghidra's `entry` in a stripped Mach-O as a loader label, while imports keep their names", async () => {
+    // Regression (Phase 4.4 benchmark): the stripped Mach-O reported entry with name_confidence imported.
+    settings();
+    const { info, at, functions } = parts(await analyze(await strippedMachoFixture()));
+    expect(info["program_entry"]).toEqual({ source: "macho-lc-main", addresses: ["0x1000004e0"], file_symbols: [], reason: null });
+    expect(at("0x1000004e0")).toMatchObject({ name: "entry", name_basis: "loader-label", name_confidence: "loader-generated", aliases: [] });
+    // _puts survives stripping: its name comes from the binary's import (undefined) symbols.
+    expect(functions.filter(({ name_confidence: confidence }) => confidence === "imported").map(({ name }) => name)).toEqual(["_puts"]);
+    for (const address of ["0x100000460", "0x100000480", "0x100000514"])
+      expect(at(address)).toMatchObject({ name_confidence: "generated", name: expect.stringMatching(/^FUN_/u) });
   });
 
   it("produces identical evidence for identical runs (determinism)", async () => {

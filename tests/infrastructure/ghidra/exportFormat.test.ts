@@ -28,6 +28,17 @@ describe("parsing a Ghidra export", () => {
     expect(parsed.value.trailer).toMatchObject({ stopped: "complete", functions_exported: 2 });
   });
 
+  it("accepts the range contract's edge cases: no loaded memory, a single address, a relocatable object", () => {
+    for (const program of [
+      { min_address: null, max_address: null, address_placement: "unknown" },
+      { min_address: "0x100000", max_address: "0x100000", address_placement: "relocatable-object" },
+    ]) {
+      const parsed = parseGhidraExport(recordsToBytes([{ ...headerRecord(), program: { ...headerRecord().program, ...program } }]), expectations);
+      if (!parsed.ok) throw new Error(JSON.stringify(parsed.error));
+      expect(parsed.value.header.program).toMatchObject(program);
+    }
+  });
+
   it("treats a missing trailer, or a line cut off mid-write, as an incomplete export", () => {
     const cut = parseGhidraExport(exportBytes({ trailer: null }), expectations);
     expect(cut.ok && cut.value.trailer).toBeNull();
@@ -60,9 +71,15 @@ describe("parsing a Ghidra export", () => {
     ["different limits", () => recordsToBytes([headerRecord({ maxFunctions: 5 })]), 1],
     ["a different Ghidra version", () => recordsToBytes([headerRecord({ ghidraVersion: "9.0" })]), 1],
     ["a decompiler state contradicting the request", () => recordsToBytes([headerRecord({ decompiler: "not-requested" })]), 1],
-    ["an unavailable program entry with an address", () => recordsToBytes([{ ...headerRecord(), program: { ...headerRecord().program, program_entry: { source: "unavailable", addresses: ["0x1"], reason: "none" } } }]), 1],
-    ["an available program entry without an address", () => recordsToBytes([{ ...headerRecord(), program: { ...headerRecord().program, program_entry: { source: "elf-header", addresses: [], reason: null } } }]), 1],
-    ["a program entry with a reason", () => recordsToBytes([{ ...headerRecord(), program: { ...headerRecord().program, program_entry: { source: "macho-lc-main", addresses: ["0x1"], reason: "why" } } }]), 1],
+    ["an unavailable program entry with an address", () => recordsToBytes([{ ...headerRecord(), program: { ...headerRecord().program, program_entry: { source: "unavailable", addresses: ["0x1"], file_symbols: null, reason: "none" } } }]), 1],
+    ["an available program entry without an address", () => recordsToBytes([{ ...headerRecord(), program: { ...headerRecord().program, program_entry: { source: "elf-header", addresses: [], file_symbols: [], reason: null } } }]), 1],
+    ["a program entry with a reason", () => recordsToBytes([{ ...headerRecord(), program: { ...headerRecord().program, program_entry: { source: "macho-lc-main", addresses: ["0x1"], file_symbols: [], reason: "why" } } }]), 1],
+    ["an available program entry without its file symbols", () => recordsToBytes([{ ...headerRecord(), program: { ...headerRecord().program, program_entry: { source: "elf-header", addresses: ["0x1"], file_symbols: null, reason: null } } }]), 1],
+    ["an unavailable program entry with file symbols", () => recordsToBytes([{ ...headerRecord(), program: { ...headerRecord().program, program_entry: { source: "unavailable", addresses: [], file_symbols: [], reason: "none" } } }]), 1],
+    // Regression (Phase 4.4 benchmark): ELF max_address came from a non-loaded section's space and read below min_address.
+    ["a loaded range whose maximum is below its minimum", () => recordsToBytes([{ ...headerRecord(), program: { ...headerRecord().program, min_address: "0x400000", max_address: "0x13f" } }]), 1],
+    ["a loaded range with only one bound", () => recordsToBytes([{ ...headerRecord(), program: { ...headerRecord().program, min_address: "0x400000", max_address: null } }]), 1],
+    ["an unknown address placement", () => recordsToBytes([{ ...headerRecord(), program: { ...headerRecord().program, address_placement: "guessed" } }]), 1],
     ["an unknown field", () => recordsToBytes([header, { ...functionRecord("0x1", "f"), extra: 1 }]), 2],
     ["an unknown record type", () => recordsToBytes([header, { type: "comment" }]), 2],
     ["a duplicate function", () => recordsToBytes([header, answer, answer]), 3],

@@ -200,7 +200,7 @@ describe("scoring", () => {
 describe("generated inputs", () => {
   it("strips the generated ELF's symbol table and nothing else", () => {
     const full = makeElf();
-    const stripped = stripGeneratedElf(full);
+    const stripped = stripGeneratedElf();
     expect(stripped.readUInt16LE(60)).toBe(3);
     expect(stripped.readUInt16LE(62)).toBe(2);
     expect(stripped.readBigUInt64LE(24)).toBe(full.readBigUInt64LE(24)); // entry

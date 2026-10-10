@@ -135,7 +135,24 @@ Verified on that environment:
 - identical evidence across runs for both fixtures;
 - identical CLI and MCP output.
 
-The export schema is `revscope.ghidra-export/2`.
+The export schema was `revscope.ghidra-export/2`.
+
+**Phase 4.4.1 (2026-10-10), benchmark-driven fixes:** the Phase 4.4 benchmark
+found three defects. Export schema `revscope.ghidra-export/3` fixes them:
+
+- `min_address`/`max_address` now bound the loaded memory in the default
+  address space. Before, `Program.getMaxAddress()` could fall in a non-loaded
+  section's space and read below the minimum on ELF.
+- New `address_placement`.
+- `program_entry.file_symbols`, so Ghidra's loader label `entry` on a
+  stripped binary is no longer reported as an imported name.
+- A truncated ELF ("No memory blocks were defined") is a non-retryable
+  `unsupported_target` (`malformed_input`), no longer a retryable
+  `provider_failure`.
+
+The real-engine tests cover these on the same environment, using the
+generated ELF, its stripped form, a truncated ELF, x86-64 and AArch64 ELF
+objects, and the Mach-O fixture with and without its symbol table.
 
 **Still unverified:**
 
@@ -144,6 +161,6 @@ The export schema is `revscope.ghidra-export/2`.
   real-world size, timing, and determinism beyond them;
 - optimized or stripped binaries, Mach-O dylibs, fat binaries and
   `LC_UNIXTHREAD` entries, and PE files (program entry unavailable);
-- the `java_runtime`, `import_failed` and `export_script_failed`
+- the `java_runtime`, generic `import_failed` and `export_script_failed`
   classification patterns, beyond the one compile failure observed;
 - Ghidra without built natives on macOS (decompiler unavailable).

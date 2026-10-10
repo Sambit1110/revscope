@@ -133,14 +133,9 @@
   - ELF relocatable objects only (this toolchain has no ELF linker);
   - two hand-built ELF executables.
 
-  It measured these defects and limits, which are not yet fixed:
-  - on stripped binaries, Ghidra's loader label `entry` is reported with
-    `name_confidence: "imported"`, although the binary has no symbol table;
-  - on ELF inputs, `max_address` lies in a non-loaded section's address
-    space and is printed without the space name, so it reads lower than
-    `min_address`;
-  - a truncated ELF header fails as `provider_failure` (`import_failed`)
-    marked retryable, although retrying cannot help;
+  It measured three defects, fixed in Phase 4.4.1 (see ADR-0007): the
+  stripped-binary `entry` label, the ELF address range, and truncated-ELF
+  retryability. It also measured this limit, which remains:
   - decompiler signatures often differ from the source. Unused parameters
     vanish, and optimized code loses parameters and widens types (for
     example `ulong` for `unsigned`). The program entry decompiles as

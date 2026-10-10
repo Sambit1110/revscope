@@ -9,7 +9,7 @@ import { chmod, copyFile, mkdir, readFile, symlink, writeFile } from "node:fs/pr
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { BASE, FUNCTIONS, makeElf } from "../../tests/fixtures/binaries/make-elf.mjs";
+import { BASE, FUNCTIONS, makeElf, makeStrippedElf } from "../../tests/fixtures/binaries/make-elf.mjs";
 import {
   GENERATED_ELF_ENTRY,
   GENERATED_ELF_FUNCTIONS,
@@ -140,28 +140,12 @@ export const buildCompiled = async (spec: CompiledCase, directory: string): Prom
   };
 };
 
-const SECTION_HEADERS_LAYOUT = [0, 1, 4]; // null, .text, .shstrtab
+/** The generated ELF without its symbol table (see tests/fixtures/binaries/make-elf.mjs). */
+export const stripGeneratedElf = (): Buffer => makeStrippedElf();
 
-/**
- * Strip the generated ELF the way `strip` would: drop .symtab and .strtab,
- * keep .text and .shstrtab. Code, program header and entry are unchanged.
- */
-export const stripGeneratedElf = (full: Buffer): Buffer => {
-  const SECTION_HEADERS = 0x110;
-  const header = (index: number) => full.subarray(SECTION_HEADERS + index * 64, SECTION_HEADERS + (index + 1) * 64);
-  const out = Buffer.alloc(SECTION_HEADERS + 3 * 64);
-  full.copy(out, 0, 0, SECTION_HEADERS);
-  out.fill(0, 0x98, SECTION_HEADERS); // .symtab and .strtab contents
-  SECTION_HEADERS_LAYOUT.forEach((from, to) => header(from).copy(out, SECTION_HEADERS + to * 64));
-  out.writeUInt16LE(3, 60); // e_shnum
-  out.writeUInt16LE(2, 62); // e_shstrndx: .shstrtab is now section 2
-  // .shstrtab still names the removed sections; strip would rewrite it, but unused names are harmless.
-  return out;
-};
 export const buildGeneratedElf = async (spec: GeneratedElfCase, directory: string): Promise<Built<GroundTruth>> => {
   const path = join(directory, spec.id);
-  const full = makeElf();
-  await writeFile(path, spec.stripped ? stripGeneratedElf(full) : full);
+  await writeFile(path, spec.stripped ? makeStrippedElf() : makeElf());
   const functions: TruthFunction[] = FUNCTIONS.map(({ name, offset }, index) => ({
     symbol: name,
     address: BASE + BigInt(offset),

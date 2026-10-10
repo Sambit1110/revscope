@@ -327,7 +327,7 @@ provider, so labels come from declared capabilities:
 | Record | Kind | Labels | Notes |
 |---|---|---|---|
 | `artifact_identity` | `artifact-bytes` | observed / original-artifact | Revscope's read of the exact bytes analyzed; the only record that speaks for the file |
-| `program_info` | `engine-interpretation` | derived / analysis-engine | Format, language, compiler spec, image base, `program_entry`, `external_entry_points` and `other_external_entry_points`, Ghidra version, whether analysis timed out, whether the decompiler started |
+| `program_info` | `engine-interpretation` | derived / analysis-engine | Format, language, compiler spec, image base, `address_placement`, the loaded `min_address`/`max_address`, `program_entry` (with the file's own `file_symbols` there), `external_entry_points` and `other_external_entry_points`, Ghidra version, whether analysis timed out, whether the decompiler started |
 | `list_functions` | `engine-interpretation` | derived / analysis-engine | Per function: address, display `name` with `name_source`, `name_basis` and `name_confidence`, `ghidra_name`, `aliases`, size, thunk flag, `is_program_entry`, `is_external_entry_point`, stored `signature` and `calling_convention` with provenance, decompilation state |
 | `decompile` (per function) | `engine-interpretation` | derived / analysis-engine | Pseudocode and `fidelity`, or a status (`failed`, `timeout`, `skipped`) with an unknown; `stored` and `decompiler` signatures, `signature_comparison`, structured `diagnostics` |
 
@@ -349,15 +349,53 @@ but loaders also create names of their own. Revscope reports:
   - `user-assigned`;
   - `imported`;
   - `ambiguous`: several imported names, and Revscope does not guess;
+  - `loader-generated`: Ghidra's loader made the label while importing; the
+    binary does not contain it (see below);
   - `generated`: Ghidra invented the name (default, analysis, AI); it is
     never presented as coming from the binary.
 
-One loader convention is handled on evidence. On Mach-O, Ghidra 12.1.4 labels
-the program entry `entry`, as the primary name, beside the symbol-table name
-(`_main`); both are `imported`. Revscope prefers the other name only when the
-function is the header-declared program entry and exactly one other imported
-name exists. `entry` is then kept as an alias with role
-`loader-entry-label`. Pseudocode text still uses Ghidra's name.
+One loader convention is handled on evidence. Ghidra 12.1.4's ELF and Mach-O
+loaders label the program entry `entry`, with source `imported`, whether or
+not the binary names it: beside `_main` on Mach-O, and alone on stripped
+Mach-O and ELF. The export script therefore reads the names the file's own
+symbol tables define at the header-declared entry (ELF `.symtab` and
+`.dynsym`, Mach-O `LC_SYMTAB`), with Ghidra's own parsers, and reports them as
+`program_entry.file_symbols` (`[]` for a stripped binary). When those names
+do not include `entry`, Ghidra's `entry` is the loader's label:
+
+- if a name from the binary sits at the entry (e.g. `_main`), it is shown
+  (`name_basis: imported-alias`) and `entry` is kept as an alias with role
+  `loader-entry-label`;
+- if none does (a stripped binary), `entry` is shown with
+  `name_basis: loader-label` and `name_confidence: loader-generated`.
+  `name_source` stays `imported`, Ghidra's own SourceType.
+
+If the file's symbols could not be read, Revscope falls back to the Phase 4.3
+rule: `entry` is the loader's label only when exactly one other imported name
+sits at the entry. Pseudocode text still uses Ghidra's name.
+
+**Address range.** `min_address` and `max_address` bound the memory Ghidra
+loaded from the file into its default address space:
+
+- Non-loaded sections (ELF section headers, symbol and string tables,
+  `.comment`) are excluded. Ghidra keeps those in separate address spaces
+  whose offsets restart at zero.
+- Ghidra's synthetic `EXTERNAL` block, which holds placeholder addresses for
+  imports, is excluded.
+- Both bounds are `null` when there is no such memory; otherwise
+  `min ≤ max`, and the export is refused if it says anything else.
+- Both bounds are inclusive.
+- The range is a hull: gaps between loaded blocks are not reported.
+
+`address_placement` says what the addresses mean:
+
+- `file-declared`: the addresses the file declares.
+- `rebased`: Ghidra loaded the program at a base other than the file's.
+- `relocatable-object`: ELF `ET_REL` or Mach-O `MH_OBJECT`. The file has no
+  load address, so Ghidra placed it (at `0x100000` in 12.1.4), and every
+  address is Ghidra's, not the file's.
+- `unknown`: the header could not be read, or the format is not ELF or
+  Mach-O.
 
 **Signatures.** Ghidra's *stored* signature (`provenance: ghidra-stored`,
 with its SourceType; `default` means never established, e.g.
@@ -422,6 +460,8 @@ files, parse errors. `program_info` lists `program_entry` and the
 | Caller cancelled | `cancelled` |
 | Ghidra or Java misconfigured | `provider_not_configured` with `details.check` |
 | Ghidra cannot load the file ("No load spec found") | `unsupported_target` |
+| A loader accepted the format but found nothing it could load: the file is truncated or malformed ("No memory blocks were defined", or "truncated/missing from file" beside a failed import) | `unsupported_target`, `details.reason: malformed_input`; not retryable, because the same bytes fail the same way |
+| Any other failed import | `provider_failure`, `details.reason: import_failed`; retryable |
 | Malformed or oversized export, other engine failure | `provider_failure` with a fixed `details.reason` |
 
 When there is no export, Ghidra's console output and logs are classified by

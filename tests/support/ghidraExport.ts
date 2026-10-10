@@ -1,4 +1,4 @@
-/** Builds `revscope.ghidra-export/1` exports for tests, one record per line. */
+/** Builds `revscope.ghidra-export/3` exports for tests, one record per line. */
 
 export interface ExportOptions {
   readonly ghidraVersion?: string;
@@ -31,8 +31,8 @@ export const DEFAULT_FUNCTIONS: NonNullable<ExportOptions["functions"]> = [
 
 export const headerRecord = (options: ExportOptions = {}) => ({
   type: "header",
-  schema: "revscope.ghidra-export/2",
-  script_version: "1",
+  schema: "revscope.ghidra-export/3",
+  script_version: "3",
   ghidra_version: options.ghidraVersion ?? "11.4",
   program: {
     executable_format: "Executable and Linking Format (ELF)",
@@ -42,9 +42,10 @@ export const headerRecord = (options: ExportOptions = {}) => ({
     endian: "little",
     address_size: 64,
     image_base: "0x400000",
+    address_placement: "file-declared",
     min_address: "0x400000",
     max_address: "0x401fff",
-    program_entry: { source: "elf-header", addresses: ["0x401000"], reason: null },
+    program_entry: { source: "elf-header", addresses: ["0x401000"], file_symbols: ["answer"], reason: null },
     external_entry_points: ["0x401000", "0x401010"],
   },
   analysis: {
