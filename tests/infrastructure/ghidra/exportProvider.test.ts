@@ -197,6 +197,43 @@ describe("the Ghidra export provider", () => {
     expect(unknownScopes(lying).filter((scope) => scope === "signature")).toHaveLength(2);
   });
 
+  it("distinguishes complete, uncertain and failed decompilations, and never overstates certainty", async () => {
+    const output = await analyze({
+      functions: [
+        { address: "0x1000", name: "clean", decompilation: { status: "ok", pseudocode: "int clean(void) { return 1; }" } },
+        {
+          address: "0x2000",
+          name: "_puts",
+          decompilation: {
+            status: "ok",
+            pseudocode: "int _puts(char *param_1) { }",
+            decompilerCallingConvention: null,
+            warnings: ["WARNING: Unknown calling convention -- yet parameter storage is locked", "WARNING: Treating indirect jump as call"],
+          },
+        },
+        { address: "0x3000", name: "broken", decompilation: { status: "failed", errorMessage: "Decompiler process died" } },
+      ],
+    });
+    const decompiled = recordsOf(output).filter(({ operation }) => operation.name === "decompile");
+    const [clean, warned, broken] = decompiled;
+    expect(clean?.payload).toMatchObject({ status: "ok", fidelity: "complete" });
+    expect(unknownScopes(clean)).not.toContain("decompilation");
+    // Warnings keep the pseudocode (status ok) but mark it uncertain, each as an unknown.
+    expect(warned?.payload).toMatchObject({ status: "ok", fidelity: "uncertain" });
+    if (warned === undefined) throw new Error("no decompile record");
+    const { diagnostics } = warned.payload as { diagnostics: { kind: string; severity: string }[] };
+    expect(diagnostics.filter(({ severity }) => severity === "material").map(({ kind }) => kind)).toEqual([
+      "decompiler-warning",
+      "decompiler-warning",
+      "decompiler-calling-convention-unknown",
+    ]);
+    // The placeholder stored signature is noted, but only as informational.
+    expect(diagnostics.filter(({ severity }) => severity === "informational").map(({ kind }) => kind)).toEqual(["stored-signature-not-established"]);
+    expect(reasons(warned)).toContain("Ghidra's decompiler warned: WARNING: Treating indirect jump as call");
+    expect(broken?.payload).toMatchObject({ status: "failed", fidelity: null, pseudocode: null });
+    expect(output.ok && output.data["analysis"]).toMatchObject({ decompiled: 2, decompiled_with_uncertainty: 1 });
+  });
+
   it("refuses mutations and unknown addresses", async () => {
     const { provider } = providerFor();
     expect(await provider.mutate()).toMatchObject({ status: "rejected" });

@@ -4,7 +4,7 @@ import { makeError, type ErrorEnvelope } from "../../domain/errors.js";
 import type { Evidence } from "../../domain/evidence.js";
 import { canonicalJson, sha256Hex, type JsonObject } from "../../domain/json.js";
 import { err, ok, type Result } from "../../domain/result.js";
-import { ENGINE_OPERATIONS, functionListPayloadSchema } from "../engineContract.js";
+import { ENGINE_OPERATIONS, decompilePayloadSchema, functionListPayloadSchema } from "../engineContract.js";
 import type {
   BinaryAnalysisLimits,
   BinaryAnalysisRun,
@@ -74,7 +74,7 @@ const collectEngineRecords = async (
   run: BinaryAnalysisRun,
   limits: BinaryAnalysisLimits,
   session: AnalysisSession,
-): Promise<Result<{ records: Evidence[]; decompiled: number }, ErrorEnvelope>> => {
+): Promise<Result<{ records: Evidence[]; decompiled: number; uncertain: number }, ErrorEnvelope>> => {
   const records: Evidence[] = [];
   const info = await session.read(ENGINE_OPERATIONS.programInfo, {});
   if (!info.ok) return info;
@@ -86,6 +86,7 @@ const collectEngineRecords = async (
   if (!functions.success)
     return err(makeError("provider_failure", "The engine's function list has an unexpected shape", {}));
   let decompiled = 0;
+  let uncertain = 0;
   if (limits.decompile)
     for (const entry of functions.data.functions) {
       if (entry.decompilation === "not-exported") continue;
@@ -93,8 +94,10 @@ const collectEngineRecords = async (
       if (!read.ok) return read;
       records.push(read.value.evidence);
       if (entry.decompilation === "ok") decompiled += 1;
+      const payload = decompilePayloadSchema.safeParse(read.value.evidence.payload);
+      if (payload.success && payload.data.fidelity === "uncertain") uncertain += 1;
     }
-  return ok({ records, decompiled });
+  return ok({ records, decompiled, uncertain });
 };
 
 export const analyzeBinaryTool = defineTool({
@@ -135,6 +138,8 @@ export const analyzeBinaryTool = defineTool({
       functions_total: coverage.functionsTotal,
       functions_exported: coverage.functionsExported,
       decompiled: engineRecords.value.decompiled,
+      // Of those, how many carry material uncertainty (decompiler warnings and the like).
+      decompiled_with_uncertainty: engineRecords.value.uncertain,
     };
     const data: JsonObject = {
       path: input.path,

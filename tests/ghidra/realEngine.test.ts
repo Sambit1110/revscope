@@ -282,6 +282,15 @@ describe("Ghidra real-engine verification: signatures (ELF)", () => {
   });
 });
 
+describe("Ghidra real-engine verification: decompiler diagnostics (ELF)", () => {
+  it("reports clean decompilations as complete", async () => {
+    settings();
+    const { decompiled, info } = parts(await analyze(await fixture()));
+    for (const address of ["0x400080", "0x400090"]) expect(decompiled(address)?.payload).toMatchObject({ status: "ok", fidelity: "complete" });
+    expect(info["decompiler"]).toBe("available");
+  });
+});
+
 describe("Ghidra real-engine verification: entry points (ELF)", () => {
   it("reports the header-declared entry separately from Ghidra's other external entry points", async () => {
     settings();
@@ -340,6 +349,25 @@ describe.runIf(process.platform === "darwin")("Ghidra real-engine verification: 
       decompiler: { signature: "int _puts(char *param_1)", calling_convention: { name: null, known: false } },
       signature_comparison: "agree",
     });
+  });
+
+  it("captures the decompiler's warnings on the _puts stub as material uncertainty, not as failure", async () => {
+    settings();
+    const output = await analyze(await machoFixture());
+    const { decompiled } = parts(output);
+    const puts = decompiled("0x100000520");
+    expect(puts?.payload).toMatchObject({ status: "ok", fidelity: "uncertain" });
+    const notes = (puts?.payload as { diagnostics: { kind: string; severity: string; message: string }[] } | undefined)?.diagnostics ?? [];
+    const warnings = notes.filter(({ kind }) => kind === "decompiler-warning");
+    // Ghidra 12.1.4 emits three warnings here; each is reported as one structured diagnostic.
+    expect(warnings).toHaveLength(3);
+    for (const warning of warnings) expect(warning).toMatchObject({ severity: "material", message: expect.stringMatching(/^WARNING: /u) });
+    expect(notes.map(({ kind }) => kind)).toContain("decompiler-calling-convention-unknown");
+    expect((puts?.unknowns ?? []).filter(({ scope }) => scope === "decompilation").length).toBeGreaterThanOrEqual(4);
+    // Functions without warnings stay complete.
+    for (const address of ["0x100000460", "0x100000480", "0x1000004e0", "0x100000514"])
+      expect(decompiled(address)?.payload, address).toMatchObject({ status: "ok", fidelity: "complete" });
+    expect(success(output).data["analysis"]).toMatchObject({ decompiled: 5, decompiled_with_uncertainty: 1 });
   });
 
   it("reads the LC_MAIN entry and does not treat exported symbols or the header as entry points", async () => {

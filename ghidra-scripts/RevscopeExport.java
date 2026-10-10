@@ -25,6 +25,9 @@ import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
+import ghidra.app.decompiler.ClangCommentToken;
+import ghidra.app.decompiler.ClangNode;
+import ghidra.app.decompiler.ClangToken;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
@@ -58,6 +61,8 @@ public class RevscopeExport extends HeadlessScript {
 	private static final int MAX_LABEL_CHARS = 256;
 	private static final int MAX_ENTRY_POINTS = 256;
 	private static final int MAX_SYMBOLS = 16;
+	private static final int MAX_WARNINGS = 32;
+	private static final int MAX_WARNING_CHARS = 1024;
 	/** Revscope refuses record lines over 256 KiB; stay well below. */
 	private static final int MAX_LINE_BYTES = 200_000;
 
@@ -87,7 +92,7 @@ public class RevscopeExport extends HeadlessScript {
 			String decompilerState = "not-requested";
 			if (decompile) {
 				decompiler = new DecompInterface();
-				decompiler.setOptions(new DecompileOptions());
+				decompiler.setOptions(warningsOnlyOptions());
 				if (decompiler.openProgram(program)) {
 					decompilerState = "available";
 				}
@@ -295,17 +300,18 @@ public class RevscopeExport extends HeadlessScript {
 		if (results == null) {
 			return decompilationRecord(function, "failed", null, false);
 		}
+		String noSignature = ",\"decompiler_signature\":null,\"decompiler_calling_convention\":null";
 		if (results.isTimedOut()) {
-			return decompilationRecord(function, "timeout", null, false);
+			return decompilationRecord(function, "timeout", null, false, noSignature + diagnostics(results));
 		}
 		DecompiledFunction decompiled = results.getDecompiledFunction();
 		if (!results.decompileCompleted() || decompiled == null || decompiled.getC() == null) {
-			return decompilationRecord(function, "failed", null, false);
+			return decompilationRecord(function, "failed", null, false, noSignature + diagnostics(results));
 		}
 		String code = decompiled.getC();
 		boolean truncated = code.length() > maxPseudocodeChars;
 		String kept = truncated ? truncate(code, maxPseudocodeChars) : code;
-		String view = decompilerView(results, decompiled);
+		String view = decompilerView(results, decompiled) + diagnostics(results);
 		String line = decompilationRecord(function, "ok", kept, truncated, view);
 		// Escaping can grow a line; shorten until it fits Revscope's line limit.
 		while (line.getBytes(StandardCharsets.UTF_8).length > MAX_LINE_BYTES && kept.length() > 0) {
@@ -340,7 +346,70 @@ public class RevscopeExport extends HeadlessScript {
 	private static String decompilationRecord(Function function, String status, String code,
 			boolean truncated) {
 		return decompilationRecord(function, status, code, truncated,
-			",\"decompiler_signature\":null,\"decompiler_calling_convention\":null");
+			",\"decompiler_signature\":null,\"decompiler_calling_convention\":null,\"warnings\":[],\"error_message\":null");
+	}
+
+	/**
+	 * Decompiler options that keep the decompiler's own warning comments and
+	 * drop every listing comment (PRE, PLATE, POST, EOL, function header). With
+	 * that, every comment token in the output is a decompiler warning: they are
+	 * identified by their token type and comment class, not by reading text.
+	 */
+	private static DecompileOptions warningsOnlyOptions() {
+		DecompileOptions options = new DecompileOptions();
+		options.setPRECommentIncluded(false);
+		options.setPLATECommentIncluded(false);
+		options.setPOSTCommentIncluded(false);
+		options.setEOLCommentIncluded(false);
+		options.setHeadCommentIncluded(false);
+		options.setWARNCommentIncluded(true);
+		return options;
+	}
+
+	/**
+	 * The decompiler's warnings and error message. Ghidra 12.1.4 exposes
+	 * warnings only as comment tokens in the C markup, one word per token,
+	 * framed by comment delimiters; the delimiters separate one warning from
+	 * the next. getErrorMessage() is empty when there are only warnings.
+	 */
+	private static String diagnostics(DecompileResults results) {
+		List<String> warnings = new java.util.ArrayList<>();
+		if (results.getCCodeMarkup() != null) {
+			collectWarnings(results.getCCodeMarkup(), new StringBuilder(), warnings);
+		}
+		StringBuilder list = new StringBuilder("[");
+		for (int index = 0; index < warnings.size() && index < MAX_WARNINGS; index++) {
+			list.append(index == 0 ? "" : ",").append(json(truncate(warnings.get(index), MAX_WARNING_CHARS)));
+		}
+		list.append("]");
+		String error = results.getErrorMessage();
+		error = error == null || error.trim().isEmpty() ? null : error.trim();
+		return ",\"warnings\":" + list + ",\"error_message\":" + nullableText(error, MAX_WARNING_CHARS);
+	}
+
+	/** Walk the markup tree; consecutive comment tokens between delimiters form one warning. */
+	private static void collectWarnings(ClangNode node, StringBuilder current, List<String> warnings) {
+		if (node instanceof ClangCommentToken) {
+			String text = ((ClangToken) node).getText().trim();
+			if (text.startsWith("/*")) {
+				current.setLength(0);
+				text = text.substring(2).trim();
+			}
+			boolean ends = text.endsWith("*/");
+			if (ends) {
+				text = text.substring(0, text.length() - 2).trim();
+			}
+			if (!text.isEmpty()) {
+				current.append(current.length() == 0 ? "" : " ").append(text);
+			}
+			if (ends && current.length() > 0) {
+				warnings.add(current.toString());
+				current.setLength(0);
+			}
+		}
+		for (int index = 0; index < node.numChildren(); index++) {
+			collectWarnings(node.Child(index), current, warnings);
+		}
 	}
 
 	private static String decompilationRecord(Function function, String status, String code,

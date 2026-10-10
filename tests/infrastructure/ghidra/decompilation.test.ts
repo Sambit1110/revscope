@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { compareSignatures, normalizeSignature } from "../../../src/infrastructure/ghidra/decompilation.js";
+import {
+  compareSignatures,
+  decompilerDiagnostics,
+  fidelityOf,
+  normalizeSignature,
+} from "../../../src/infrastructure/ghidra/decompilation.js";
 
 describe("comparing stored and decompiler signatures", () => {
   it("normalizes formatting only", () => {
@@ -39,5 +44,37 @@ describe("comparing stored and decompiler signatures", () => {
 
   it("has nothing to compare without a decompiler signature", () => {
     expect(compareSignatures({ text: "int f(void)", source: "imported", callingConvention: null }, null)).toEqual({ comparison: "unavailable", diagnostics: [] });
+  });
+});
+
+const base = { status: "ok" as const, warnings: [], errorMessage: null, decompilerCallingConvention: "__cdecl", truncated: false };
+
+describe("decompiler diagnostics and fidelity", () => {
+  it("calls a clean decompilation complete", () => {
+    const diagnostics = decompilerDiagnostics(base);
+    expect(diagnostics).toEqual([]);
+    expect(fidelityOf("ok", diagnostics)).toBe("complete");
+  });
+
+  it("never represents warning-bearing output as complete, and never as failed", () => {
+    const diagnostics = decompilerDiagnostics({ ...base, warnings: ["WARNING: Could not recover jumptable at 0x100000528. Too many branches"] });
+    expect(diagnostics).toEqual([{ kind: "decompiler-warning", severity: "material", message: "WARNING: Could not recover jumptable at 0x100000528. Too many branches" }]);
+    expect(fidelityOf("ok", diagnostics)).toBe("uncertain");
+  });
+
+  it("treats every structural uncertainty signal as material", () => {
+    expect(decompilerDiagnostics({ ...base, decompilerCallingConvention: null }).map(({ kind }) => kind)).toEqual(["decompiler-calling-convention-unknown"]);
+    expect(decompilerDiagnostics({ ...base, errorMessage: "Low-level Error: overlapping input varnodes" })[0]).toMatchObject({ kind: "decompiler-message", severity: "material" });
+    expect(decompilerDiagnostics({ ...base, truncated: true }).map(({ kind }) => kind)).toEqual(["pseudocode-truncated"]);
+  });
+
+  it("keeps failures distinct: no fidelity, and the error message only explains the failure", () => {
+    const diagnostics = decompilerDiagnostics({ ...base, status: "failed", decompilerCallingConvention: null, errorMessage: "Decompiler process died" });
+    expect(diagnostics).toEqual([{ kind: "decompiler-message", severity: "informational", message: "Decompiler process died" }]);
+    for (const status of ["failed", "timeout", "skipped", "not-exported"]) expect(fidelityOf(status, diagnostics)).toBeNull();
+  });
+
+  it("does not let informational notes lower fidelity", () => {
+    expect(fidelityOf("ok", [{ kind: "stored-signature-not-established", severity: "informational", message: "x" }])).toBe("complete");
   });
 });

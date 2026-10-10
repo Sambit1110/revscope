@@ -22,3 +22,12 @@ export const functionListPayloadSchema = z.looseObject({
     }),
   ),
 });
+
+/**
+ * What the tool reads from a decompile record: whether a completed
+ * decompilation is complete or carries material uncertainty. Engines that
+ * cannot tell report null.
+ */
+export const decompilePayloadSchema = z.looseObject({
+  fidelity: z.enum(["complete", "uncertain"]).nullable().optional(),
+});

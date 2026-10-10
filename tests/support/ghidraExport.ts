@@ -16,6 +16,8 @@ export interface ExportOptions {
       readonly truncated?: boolean;
       readonly decompilerSignature?: string;
       readonly decompilerCallingConvention?: string | null;
+      readonly warnings?: readonly string[];
+      readonly errorMessage?: string;
     } | null;
   }[];
   /** null omits the trailer, as when the engine is cut off. */
@@ -89,6 +91,8 @@ export const exportRecords = (options: ExportOptions = {}): object[] => {
         // An explicit null (unknown convention) is kept; only an omitted value defaults.
         decompiler_calling_convention:
           decompilation.status !== "ok" ? null : decompilation.decompilerCallingConvention === undefined ? "__cdecl" : decompilation.decompilerCallingConvention,
+        warnings: decompilation.warnings ?? [],
+        error_message: decompilation.errorMessage ?? null,
       });
   }
   if (options.trailer !== null)

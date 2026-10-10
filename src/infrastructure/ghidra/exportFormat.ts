@@ -106,6 +106,10 @@ const decompilationSchema = z
     /** The decompiler's own inferred signature and calling-convention model; null when unknown. */
     decompiler_signature: label(EXPORT_LIMITS.signatureChars).nullable(),
     decompiler_calling_convention: label(256).nullable(),
+    /** The decompiler's warning comments, one per warning (structured: see RevscopeExport.java). */
+    warnings: z.array(label(1024)).max(32),
+    /** DecompileResults.getErrorMessage(), when not empty. */
+    error_message: label(1024).nullable(),
   })
   .refine(
     (record) => (record.status === "ok") === (record.pseudocode !== null),

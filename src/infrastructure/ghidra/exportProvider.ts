@@ -12,7 +12,19 @@ import type {
 import type { EvidenceUnknown } from "../../domain/evidence.js";
 import type { JsonObject } from "../../domain/json.js";
 import { EXPORT_LIMITS, GHIDRA_EXPORT_SCHEMA, type ExportFunction, type GhidraExport } from "./exportFormat.js";
-import { compareSignatures, type DecompilationDiagnostic } from "./decompilation.js";
+import {
+  compareSignatures,
+  decompilerDiagnostics,
+  fidelityOf,
+  type DecompilationDiagnostic,
+  type DiagnosticKind,
+} from "./decompilation.js";
+
+const SIGNATURE_KINDS: ReadonlySet<DiagnosticKind> = new Set([
+  "stored-signature-not-established",
+  "signature-disagreement",
+  "calling-convention-disagreement",
+]);
 import { chooseFunctionName, type FunctionNaming } from "./naming.js";
 
 /** Ghidra's stored signature and calling convention, with provenance; unknown stays unknown. */
@@ -196,8 +208,6 @@ export class GhidraExportProvider implements AnalysisProvider {
         if (this.#export.header.analysis.decompiler === "unavailable")
           unknowns.push({ scope: "decompilation", reason: DECOMPILER_UNAVAILABLE });
         else if (state !== "ok") unknowns.push({ scope: "decompilation", reason: DECOMPILATION_UNKNOWNS[state] });
-        if (decompiled?.truncated === true)
-          unknowns.push({ scope: "decompilation", reason: `Pseudocode was truncated to at most ${String(EXPORT_LIMITS.pseudocodeChars)} characters.` });
         const decompilerSignature =
           decompiled?.decompiler_signature === null || decompiled === undefined
             ? null
@@ -206,8 +216,26 @@ export class GhidraExportProvider implements AnalysisProvider {
           { text: entry.signature, source: entry.signature_source, callingConvention: entry.calling_convention },
           decompilerSignature,
         );
-        for (const diagnostic of signatures.diagnostics)
-          if (diagnostic.severity === "material") unknowns.push({ scope: "signature", reason: diagnostic.message });
+        const decompilerNotes = decompilerDiagnostics({
+          status: state,
+          warnings: decompiled?.warnings ?? [],
+          errorMessage: decompiled?.error_message ?? null,
+          decompilerCallingConvention: decompiled?.decompiler_calling_convention ?? null,
+          truncated: decompiled?.truncated ?? false,
+        });
+        const diagnostics = [...decompilerNotes, ...signatures.diagnostics];
+        // Every material diagnostic is also an evidence unknown; informational ones are not.
+        for (const diagnostic of diagnostics)
+          if (diagnostic.severity === "material")
+            unknowns.push({
+              scope: SIGNATURE_KINDS.has(diagnostic.kind) ? "signature" : "decompilation",
+              reason:
+                diagnostic.kind === "decompiler-warning"
+                  ? `Ghidra's decompiler warned: ${diagnostic.message}`
+                  : diagnostic.kind === "pseudocode-truncated"
+                    ? `Pseudocode was truncated to at most ${String(EXPORT_LIMITS.pseudocodeChars)} characters.`
+                    : diagnostic.message,
+            });
         return this.#ok(
           {
             address,
@@ -230,7 +258,8 @@ export class GhidraExportProvider implements AnalysisProvider {
                     provenance: "ghidra-decompiler",
                   },
             signature_comparison: signatures.comparison,
-            diagnostics: signatures.diagnostics.map(diagnosticJson),
+            fidelity: fidelityOf(state, diagnostics),
+            diagnostics: diagnostics.map(diagnosticJson),
           },
           unknowns,
         );
