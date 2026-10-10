@@ -15,7 +15,8 @@ a verification run is labelled **unverified**.
 |---|---|
 | Stub provider (fixtures) | Verified by the deterministic test suite |
 | Ghidra integration against a fake `analyzeHeadless` | Verified by `npm run check` (process lifecycle, export validation, labels, errors, cleanup, CLI/MCP equivalence) |
-| Ghidra 12.1.4, macOS 27.0.1 arm64, locally built natives, Temurin JDK 25.0.2 | **Verified** by `npm run test:ghidra` (9/9, two runs, Phase 4.1) on a 592-byte ELF fixture |
+| Ghidra 12.1.4, macOS 27.0.1 arm64, locally built natives, Temurin JDK 25.0.2 | **Verified** by `npm run test:ghidra` (19/19, two runs, Phase 4.3) on a 592-byte x86-64 ELF fixture and an ARM64 Mach-O compiled from a small C file at `-O0` |
+| Mach-O real-engine tests on non-macOS hosts | Not run: they need clang targeting arm64 Mach-O and are reported as skipped there |
 | Ghidra 12.1.4 on macOS arm64 without built natives | Unverified (expected: decompiler reported unavailable) |
 | Other Ghidra versions | Unverified |
 | Ghidra on Linux / Windows | Unverified |

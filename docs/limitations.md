@@ -20,6 +20,18 @@
   `authorized: true` (`--authorized`). Revscope records it and cannot verify
   that the caller may analyze the file.
 - **Ghidra coverage is partial:**
+  - The program entry is read only from ELF `e_entry` and Mach-O `LC_MAIN`.
+    Other formats, `LC_UNIXTHREAD` and fat Mach-O files report it as
+    unavailable.
+  - Only Ghidra's loader label `entry` is recognised, and only at the
+    header-declared program entry beside exactly one other imported name.
+    Other loader-created names stay reported as Ghidra's `imported` names.
+  - Every decompiler warning counts as material uncertainty; Revscope does
+    not rank warning text. `fidelity: complete` means no detectable
+    uncertainty, not a faithful reconstruction.
+  - Signature comparison is textual after formatting normalization. Two
+    signatures that mean the same but are written differently are reported
+    as differing.
   - Only functions in the default address space are exported.
   - At most 1 000 functions.
   - Pseudocode is truncated at 64 Ki characters per function.

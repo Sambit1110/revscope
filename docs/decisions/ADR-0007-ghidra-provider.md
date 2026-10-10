@@ -118,11 +118,32 @@ Verified on that environment:
 - identical CLI and MCP output;
 - JDK 25 running Ghidra 12.1.4.
 
+**Phase 4.3 (2026-10-10), analysis fidelity:** `npm run test:ghidra` passed
+19/19, twice, on the same environment. The new tests use the ELF fixture
+and an ARM64 Mach-O compiled at test time from
+`tests/fixtures/binaries/macho/program.c` (`clang -arch arm64 -O0`, never
+run or committed).
+
+Verified on that environment:
+
+- the program entry from ELF `e_entry` and Mach-O `LC_MAIN`, apart from
+  exported symbols;
+- `_main` shown with `entry` as Ghidra's loader label;
+- stored and decompiler signatures kept apart;
+- the three decompiler warnings on the `_puts` stub captured structurally
+  as material uncertainty, with the other functions complete;
+- identical evidence across runs for both fixtures;
+- identical CLI and MCP output.
+
+The export schema is `revscope.ghidra-export/2`.
+
 **Still unverified:**
 
 - other Ghidra versions, Linux and Windows;
-- binaries other than the 592-byte fixture: real-world size, timing, and
-  determinism beyond it;
+- binaries other than the two small fixtures (unoptimized, unstripped):
+  real-world size, timing, and determinism beyond them;
+- optimized or stripped binaries, Mach-O dylibs, fat binaries and
+  `LC_UNIXTHREAD` entries, and PE files (program entry unavailable);
 - the `java_runtime`, `import_failed` and `export_script_failed`
   classification patterns, beyond the one compile failure observed;
 - Ghidra without built natives on macOS (decompiler unavailable).

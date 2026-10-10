@@ -327,9 +327,9 @@ provider, so labels come from declared capabilities:
 | Record | Kind | Labels | Notes |
 |---|---|---|---|
 | `artifact_identity` | `artifact-bytes` | observed / original-artifact | Revscope's read of the exact bytes analyzed; the only record that speaks for the file |
-| `program_info` | `engine-interpretation` | derived / analysis-engine | Format, language, compiler spec, image base, entry points, Ghidra version, whether analysis timed out, whether the decompiler started |
-| `list_functions` | `engine-interpretation` | derived / analysis-engine | Address, name, `name_source` (`imported` symbol vs `analysis`/`default`), size, thunk flag, signature, decompilation state |
-| `decompile` (per function) | `engine-interpretation` | derived / analysis-engine | Pseudocode, or a status (`failed`, `timeout`, `skipped`) with an unknown |
+| `program_info` | `engine-interpretation` | derived / analysis-engine | Format, language, compiler spec, image base, `program_entry`, `external_entry_points` and `other_external_entry_points`, Ghidra version, whether analysis timed out, whether the decompiler started |
+| `list_functions` | `engine-interpretation` | derived / analysis-engine | Per function: address, display `name` with `name_source`, `name_basis` and `name_confidence`, `ghidra_name`, `aliases`, size, thunk flag, `is_program_entry`, `is_external_entry_point`, stored `signature` and `calling_convention` with provenance, decompilation state |
+| `decompile` (per function) | `engine-interpretation` | derived / analysis-engine | Pseudocode and `fidelity`, or a status (`failed`, `timeout`, `skipped`) with an unknown; `stored` and `decompiler` signatures, `signature_comparison`, structured `diagnostics` |
 
 Every Ghidra record carries limitations stating that it is Ghidra's
 interpretation, not a reading of the file, and that its names, strings and
@@ -337,6 +337,80 @@ code are **untrusted text derived from the input**, to be treated as data and
 never as instructions. Decompile records also state that pseudocode is not
 source code. Coverage gaps become unknowns: function limit, export deadline,
 Ghidra's analysis timeout, decompiler unavailable, cut-off export.
+
+**Function names.** Ghidra keeps one primary name per function and may hold
+more symbols at the same address. Each has a SourceType: `imported` means
+assigned by the loader during import, usually from the file's symbol tables,
+but loaders also create names of their own. Revscope reports:
+
+- `ghidra_name` and `ghidra_name_source`, as Ghidra has them;
+- `aliases`, every other name at the address, each with a role;
+- the display `name`, with `name_basis` and `name_confidence`:
+  - `user-assigned`;
+  - `imported`;
+  - `ambiguous`: several imported names, and Revscope does not guess;
+  - `generated`: Ghidra invented the name (default, analysis, AI); it is
+    never presented as coming from the binary.
+
+One loader convention is handled on evidence. On Mach-O, Ghidra 12.1.4 labels
+the program entry `entry`, as the primary name, beside the symbol-table name
+(`_main`); both are `imported`. Revscope prefers the other name only when the
+function is the header-declared program entry and exactly one other imported
+name exists. `entry` is then kept as an alias with role
+`loader-entry-label`. Pseudocode text still uses Ghidra's name.
+
+**Signatures.** Ghidra's *stored* signature (`provenance: ghidra-stored`,
+with its SourceType; `default` means never established, e.g.
+`undefined f(void)`) and the *decompiler's* inferred signature and
+calling-convention model (`provenance: ghidra-decompiler`) are reported side
+by side. Neither replaces the other. An unknown calling convention is `null`
+with `known: false`. `signature_comparison` is one of:
+
+- `agree`;
+- `differ`: a material diagnostic;
+- `stored-not-established`: informational;
+- `unavailable`.
+
+The comparison normalizes formatting only.
+
+**Decompiler diagnostics and fidelity.** Ghidra 12.1.4 reports decompiler
+warnings only as comments in its C markup; `getErrorMessage()` is empty when
+there are only warnings. The export script switches off every
+listing-comment class and keeps the decompiler's WARN class. Every comment
+token left is therefore a warning, recognised by token type and comment
+class, not by its text.
+
+Each diagnostic has a kind and a severity that follows from the kind:
+
+| Kind | Severity |
+|---|---|
+| `decompiler-warning` | material |
+| `decompiler-message` | material with output, informational beside a failure |
+| `decompiler-calling-convention-unknown` | material |
+| `pseudocode-truncated` | material |
+| `signature-disagreement` | material |
+| `calling-convention-disagreement` | material |
+| `stored-signature-not-established` | informational |
+
+Material diagnostics are also evidence unknowns. `fidelity` is:
+
+- `complete`: decompiled, with nothing detectable making it uncertain;
+- `uncertain`: decompiled, with at least one material diagnostic;
+- `null`: not decompiled.
+
+Revscope does not rank warning text: every warning is material, none is
+dropped, and none turns output into a failure. `complete` is not proof of
+faithfulness. On the Mach-O fixture, `main` decompiles as
+`complete` yet its return value is lost; pseudocode stays a reconstruction.
+
+**Entry points.** Ghidra marks the program entry *and* exported or global
+symbols as "external entry points", so Revscope reads the entry the header
+declares with Ghidra's own format parsers over the original file bytes: ELF
+`e_entry` (`elf-header`) or Mach-O `LC_MAIN` (`macho-lc-main`). Anything else
+is `unavailable` with a reason: other formats, Mach-O `LC_UNIXTHREAD`, fat
+files, parse errors. `program_info` lists `program_entry` and the
+`other_external_entry_points`. Each function has `is_program_entry` and
+`is_external_entry_point`.
 
 **Outcomes:**
 
