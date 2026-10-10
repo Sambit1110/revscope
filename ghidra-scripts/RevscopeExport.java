@@ -45,6 +45,8 @@ import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.pcode.HighFunction;
+import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
 
 public class RevscopeExport extends HeadlessScript {
@@ -271,7 +273,8 @@ public class RevscopeExport extends HeadlessScript {
 
 	private String functionRecord(Function function) {
 		Symbol symbol = function.getSymbol();
-		String convention = function.getCallingConventionName();
+		// Unknown is reported as null, never as a convention named "unknown".
+		String convention = function.hasUnknownCallingConventionName() ? null : function.getCallingConventionName();
 		String signature = function.getSignature().getPrototypeString();
 		return "{\"type\":\"function\",\"address\":" + json(hex(function.getEntryPoint())) +
 			",\"name\":" + json(nonEmpty(truncate(function.getName(), MAX_NAME_CHARS))) +
@@ -282,7 +285,8 @@ public class RevscopeExport extends HeadlessScript {
 			",\"is_external_entry_point\":" +
 			function.getProgram().getSymbolTable().isExternalEntryPoint(function.getEntryPoint()) +
 			",\"calling_convention\":" + nullableText(convention, MAX_LABEL_CHARS) +
-			",\"signature\":" + nullableText(signature, MAX_SIGNATURE_CHARS) + "}";
+			",\"signature\":" + nullableText(signature, MAX_SIGNATURE_CHARS) +
+			",\"signature_source\":" + json(sourceName(function.getSignatureSource())) + "}";
 	}
 
 	private String decompile(DecompInterface decompiler, Function function, int timeoutSeconds,
@@ -301,27 +305,61 @@ public class RevscopeExport extends HeadlessScript {
 		String code = decompiled.getC();
 		boolean truncated = code.length() > maxPseudocodeChars;
 		String kept = truncated ? truncate(code, maxPseudocodeChars) : code;
-		String line = decompilationRecord(function, "ok", kept, truncated);
+		String view = decompilerView(results, decompiled);
+		String line = decompilationRecord(function, "ok", kept, truncated, view);
 		// Escaping can grow a line; shorten until it fits Revscope's line limit.
 		while (line.getBytes(StandardCharsets.UTF_8).length > MAX_LINE_BYTES && kept.length() > 0) {
 			kept = truncate(kept, kept.length() / 2);
-			line = decompilationRecord(function, "ok", kept, true);
+			line = decompilationRecord(function, "ok", kept, true, view);
 		}
 		return line;
 	}
 
+	/**
+	 * The decompiler's own signature and calling-convention model, kept apart
+	 * from the function's stored signature: the decompiler infers them and does
+	 * not write them back.
+	 */
+	private static String decompilerView(DecompileResults results, DecompiledFunction decompiled) {
+		String signature = decompiled.getSignature();
+		if (signature != null) {
+			signature = signature.trim();
+			if (signature.endsWith(";")) {
+				signature = signature.substring(0, signature.length() - 1).trim();
+			}
+		}
+		HighFunction high = results.getHighFunction();
+		String model = high == null ? null : high.getFunctionPrototype().getModelName();
+		if ("unknown".equals(model)) {
+			model = null;
+		}
+		return ",\"decompiler_signature\":" + nullableText(signature, MAX_SIGNATURE_CHARS) +
+			",\"decompiler_calling_convention\":" + nullableText(model, MAX_LABEL_CHARS);
+	}
+
 	private static String decompilationRecord(Function function, String status, String code,
 			boolean truncated) {
+		return decompilationRecord(function, status, code, truncated,
+			",\"decompiler_signature\":null,\"decompiler_calling_convention\":null");
+	}
+
+	private static String decompilationRecord(Function function, String status, String code,
+			boolean truncated, String view) {
 		return "{\"type\":\"decompilation\",\"address\":" + json(hex(function.getEntryPoint())) +
 			",\"status\":" + json(status) + ",\"pseudocode\":" + (code == null ? "null" : json(code)) +
-			",\"truncated\":" + truncated + "}";
+			",\"truncated\":" + truncated + view + "}";
 	}
 
 	private static String nameSource(Symbol symbol) {
-		if (symbol == null) {
+		return symbol == null ? "other" : sourceName(symbol.getSource());
+	}
+
+	/** Ghidra's SourceType as Revscope names it. */
+	private static String sourceName(SourceType source) {
+		if (source == null) {
 			return "other";
 		}
-		switch (symbol.getSource().name()) {
+		switch (source.name()) {
 			case "IMPORTED":
 				return "imported";
 			case "ANALYSIS":

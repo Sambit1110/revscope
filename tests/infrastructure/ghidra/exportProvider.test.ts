@@ -163,6 +163,40 @@ describe("the Ghidra export provider", () => {
     expect(list.status === "ok" && (list.payload as { functions: { is_program_entry: boolean }[] }).functions.some(({ is_program_entry }) => is_program_entry)).toBe(false);
   });
 
+  it("keeps the stored and decompiler signatures apart, with provenance", async () => {
+    const records = recordsOf(
+      await analyze({
+        functions: [
+          { address: "0x1000", name: "_add", decompilation: { status: "ok", pseudocode: "int _add(int param_1,int param_2) { }", decompilerSignature: "int _add(int param_1,int param_2)" } },
+          { address: "0x2000", name: "_puts", stored: { signature: "int _puts(char * param_1)", signatureSource: "imported" }, decompilation: { status: "ok", pseudocode: "", decompilerSignature: "int _puts(char *param_1)", decompilerCallingConvention: null } },
+          { address: "0x3000", name: "lying", stored: { signature: "int lying(int a)", signatureSource: "imported", callingConvention: "__stdcall" }, decompilation: { status: "ok", pseudocode: "", decompilerSignature: "void lying(void)" } },
+        ],
+      }),
+    );
+    const list = records[2]?.payload as { functions: Record<string, unknown>[] } | undefined;
+    expect(list?.functions[0]).toMatchObject({
+      signature: { text: "undefined _add(void)", source: "default", provenance: "ghidra-stored" },
+      calling_convention: { name: null, known: false, provenance: "ghidra-stored" },
+    });
+    const [add, puts, lying] = records.filter(({ operation }) => operation.name === "decompile");
+    expect(add?.payload).toMatchObject({
+      stored: { signature: { text: "undefined _add(void)", source: "default" } },
+      decompiler: { signature: "int _add(int param_1,int param_2)", calling_convention: { name: "__cdecl", known: true }, provenance: "ghidra-decompiler" },
+      signature_comparison: "stored-not-established",
+    });
+    // A placeholder signature is informational only: no unknown is added for it.
+    expect(unknownScopes(add)).not.toContain("signature");
+    expect(puts?.payload).toMatchObject({ signature_comparison: "agree", decompiler: { calling_convention: { name: null, known: false } } });
+    expect(lying?.payload).toMatchObject({
+      signature_comparison: "differ",
+      diagnostics: [
+        expect.objectContaining({ kind: "calling-convention-disagreement", severity: "material" }),
+        expect.objectContaining({ kind: "signature-disagreement", severity: "material" }),
+      ],
+    });
+    expect(unknownScopes(lying).filter((scope) => scope === "signature")).toHaveLength(2);
+  });
+
   it("refuses mutations and unknown addresses", async () => {
     const { provider } = providerFor();
     expect(await provider.mutate()).toMatchObject({ status: "rejected" });

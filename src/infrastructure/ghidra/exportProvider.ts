@@ -12,7 +12,16 @@ import type {
 import type { EvidenceUnknown } from "../../domain/evidence.js";
 import type { JsonObject } from "../../domain/json.js";
 import { EXPORT_LIMITS, GHIDRA_EXPORT_SCHEMA, type ExportFunction, type GhidraExport } from "./exportFormat.js";
+import { compareSignatures, type DecompilationDiagnostic } from "./decompilation.js";
 import { chooseFunctionName, type FunctionNaming } from "./naming.js";
+
+/** Ghidra's stored signature and calling convention, with provenance; unknown stays unknown. */
+const storedSignatureJson = (entry: ExportFunction): JsonObject => ({
+  signature: { text: entry.signature, source: entry.signature_source, provenance: "ghidra-stored" },
+  calling_convention: { name: entry.calling_convention, known: entry.calling_convention !== null, provenance: "ghidra-stored" },
+});
+
+const diagnosticJson = (diagnostic: DecompilationDiagnostic): JsonObject => ({ ...diagnostic });
 
 /** Every Ghidra result is the engine's interpretation, never a reading of the file itself. */
 export const GHIDRA_LIMITATIONS = {
@@ -167,8 +176,7 @@ export class GhidraExportProvider implements AnalysisProvider {
               is_thunk: entry.is_thunk,
               is_program_entry: header.program.program_entry.addresses.includes(entry.address),
               is_external_entry_point: entry.is_external_entry_point,
-              calling_convention: entry.calling_convention,
-              signature: entry.signature,
+              ...storedSignatureJson(entry),
               decompilation: this.#state(entry.address),
             })),
             functions_exported: functions.length,
@@ -190,6 +198,16 @@ export class GhidraExportProvider implements AnalysisProvider {
         else if (state !== "ok") unknowns.push({ scope: "decompilation", reason: DECOMPILATION_UNKNOWNS[state] });
         if (decompiled?.truncated === true)
           unknowns.push({ scope: "decompilation", reason: `Pseudocode was truncated to at most ${String(EXPORT_LIMITS.pseudocodeChars)} characters.` });
+        const decompilerSignature =
+          decompiled?.decompiler_signature === null || decompiled === undefined
+            ? null
+            : { text: decompiled.decompiler_signature, callingConvention: decompiled.decompiler_calling_convention };
+        const signatures = compareSignatures(
+          { text: entry.signature, source: entry.signature_source, callingConvention: entry.calling_convention },
+          decompilerSignature,
+        );
+        for (const diagnostic of signatures.diagnostics)
+          if (diagnostic.severity === "material") unknowns.push({ scope: "signature", reason: diagnostic.message });
         return this.#ok(
           {
             address,
@@ -199,6 +217,20 @@ export class GhidraExportProvider implements AnalysisProvider {
             status: state,
             pseudocode: decompiled?.pseudocode ?? null,
             truncated: decompiled?.truncated ?? false,
+            stored: storedSignatureJson(entry),
+            decompiler:
+              decompilerSignature === null
+                ? null
+                : {
+                    signature: decompilerSignature.text,
+                    calling_convention: {
+                      name: decompilerSignature.callingConvention,
+                      known: decompilerSignature.callingConvention !== null,
+                    },
+                    provenance: "ghidra-decompiler",
+                  },
+            signature_comparison: signatures.comparison,
+            diagnostics: signatures.diagnostics.map(diagnosticJson),
           },
           unknowns,
         );

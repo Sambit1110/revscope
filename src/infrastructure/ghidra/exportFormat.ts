@@ -92,6 +92,8 @@ const functionSchema = z.strictObject({
   is_external_entry_point: z.boolean(),
   calling_convention: label(256).nullable(),
   signature: label(EXPORT_LIMITS.signatureChars).nullable(),
+  /** Ghidra's SourceType for the stored signature; "default" means not established. */
+  signature_source: z.enum(NAME_SOURCES),
 });
 
 const decompilationSchema = z
@@ -101,10 +103,17 @@ const decompilationSchema = z
     status: z.enum(["ok", "failed", "timeout", "skipped"]),
     pseudocode: z.string().max(EXPORT_LIMITS.pseudocodeChars).nullable(),
     truncated: z.boolean(),
+    /** The decompiler's own inferred signature and calling-convention model; null when unknown. */
+    decompiler_signature: label(EXPORT_LIMITS.signatureChars).nullable(),
+    decompiler_calling_convention: label(256).nullable(),
   })
   .refine(
     (record) => (record.status === "ok") === (record.pseudocode !== null),
     "pseudocode must be present exactly when status is ok",
+  )
+  .refine(
+    (record) => record.status === "ok" || (record.decompiler_signature === null && record.decompiler_calling_convention === null),
+    "only a completed decompilation has a decompiler signature",
   );
 
 const trailerSchema = z.strictObject({

@@ -264,6 +264,24 @@ describe("Ghidra real-engine verification: function names (ELF)", () => {
   });
 });
 
+describe("Ghidra real-engine verification: signatures (ELF)", () => {
+  it("keeps stored and decompiler signatures apart, and an unknown calling convention unknown", async () => {
+    settings();
+    const { at, decompiled } = parts(await analyze(await fixture()));
+    // answer is the program entry: Ghidra's loader gives it the processEntry convention.
+    expect(at("0x400080")).toMatchObject({
+      signature: { text: "undefined answer(void)", source: "default", provenance: "ghidra-stored" },
+      calling_convention: { name: "processEntry", known: true },
+    });
+    expect(at("0x400090")).toMatchObject({ calling_convention: { name: null, known: false } });
+    expect(decompiled("0x400090")?.payload).toMatchObject({
+      stored: { signature: { text: "undefined twice(void)", source: "default" } },
+      decompiler: { signature: "int twice(int param_1)", provenance: "ghidra-decompiler" },
+      signature_comparison: "stored-not-established",
+    });
+  });
+});
+
 describe("Ghidra real-engine verification: entry points (ELF)", () => {
   it("reports the header-declared entry separately from Ghidra's other external entry points", async () => {
     settings();
@@ -299,6 +317,29 @@ describe.runIf(process.platform === "darwin")("Ghidra real-engine verification: 
     expect(decompiled("0x1000004e0")?.payload).toMatchObject({ name: "_main", ghidra_name: "entry" });
     for (const [address, name] of [["0x100000460", "_add"], ["0x100000480", "_factorial"], ["0x100000514", "_greeting"]] as const)
       expect(at(address)).toMatchObject({ name, ghidra_name: name, name_confidence: "imported", aliases: [] });
+  });
+
+  it("keeps stored and decompiler signatures apart (_add, _factorial, _puts)", async () => {
+    settings();
+    const { at, decompiled } = parts(await analyze(await machoFixture()));
+    for (const [address, stored, inferred] of [
+      ["0x100000460", "undefined _add(void)", "int _add(int param_1,int param_2)"],
+      ["0x100000480", "undefined _factorial(void)", "int _factorial(int param_1)"],
+    ] as const) {
+      // The stored signature is Ghidra's placeholder and is not replaced by the decompiler's inference.
+      expect(at(address)).toMatchObject({ signature: { text: stored, source: "default" }, calling_convention: { name: null, known: false } });
+      expect(decompiled(address)?.payload).toMatchObject({
+        stored: { signature: { text: stored, source: "default" } },
+        decompiler: { signature: inferred, calling_convention: { name: "__cdecl", known: true } },
+        signature_comparison: "stored-not-established",
+      });
+    }
+    // _puts's stored signature came from Ghidra's library type information and matches the decompiler's.
+    expect(decompiled("0x100000520")?.payload).toMatchObject({
+      stored: { signature: { text: "int _puts(char * param_1)", source: "imported" } },
+      decompiler: { signature: "int _puts(char *param_1)", calling_convention: { name: null, known: false } },
+      signature_comparison: "agree",
+    });
   });
 
   it("reads the LC_MAIN entry and does not treat exported symbols or the header as entry points", async () => {
