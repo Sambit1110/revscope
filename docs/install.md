@@ -21,7 +21,7 @@ Verified end to end only on the reference environment: macOS arm64, Ghidra
 ## 2. Get, build and check Revscope
 
 ```bash
-git clone <repository URL> revscope
+git clone https://github.com/Sambit1110/revscope.git revscope
 cd revscope
 npm ci
 npm run check

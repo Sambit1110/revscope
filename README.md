@@ -51,7 +51,7 @@ macOS on Node.js 24.11 and 26 is included but has not run yet. See
 Full steps, including Ghidra, are in [docs/install.md](docs/install.md).
 
 ```bash
-git clone <repository URL>
+git clone https://github.com/Sambit1110/revscope.git
 cd revscope
 npm ci
 npm run check

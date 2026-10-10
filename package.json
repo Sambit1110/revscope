@@ -5,6 +5,14 @@
   "description": "Evidence-labelled binary analysis for the command line and MCP clients, using Ghidra headless as the analysis engine.",
   "license": "Apache-2.0",
   "author": "Sambit Biswas",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sambit1110/revscope.git"
+  },
+  "homepage": "https://github.com/Sambit1110/revscope#readme",
+  "bugs": {
+    "url": "https://github.com/Sambit1110/revscope/issues"
+  },
   "keywords": [
     "reverse-engineering",
     "binary-analysis",

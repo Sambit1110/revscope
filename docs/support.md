@@ -3,8 +3,8 @@
 A runtime, platform or Ghidra setup is **verified** only when the relevant
 check has actually run there and passed. Anything declared or configured but
 not yet run is **unverified**. CI workflows exist in `.github/workflows/`,
-but no CI job has run yet (the repository is not on GitHub yet); this page
-will be updated from their results.
+but no CI job has run yet (nothing has been pushed to the GitHub repository
+yet); this page will be updated from their results.
 
 ## Runtime and platform
 
